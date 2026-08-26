@@ -322,7 +322,13 @@ SCHEMA_VERSION = 1
 
 @dataclasses.dataclass(frozen=True)
 class GroupingPolicy:
-    """The options a grouping was built under, serialized with the plan."""
+    """The options a grouping was built under, serialized with the plan.
+
+    This is the policy axis of a flag combination: every field changes what
+    :func:`~.inference.build_grouping` produces. The method axis (which
+    software processes the grouped data) is :class:`~.methods.MethodSelection`;
+    :func:`~.methods.combined_key` composes the two into one canonical key.
+    """
 
     separate_all_dwis: bool = False
     ignore_fieldmaps: bool = False
@@ -333,6 +339,51 @@ class GroupingPolicy:
     use_synb0: bool = False
     use_nipreps_syn_sdc: bool = False
     distortion_group_merge: str = 'concat'
+
+    def key_parts(self) -> list[str]:
+        """The non-default ``name=value`` parts of this policy's canonical key.
+
+        Only non-default values appear (unspecified means default, like the
+        CLI), so adding a future field never respells existing combinations.
+        The default policy serializes to no parts at all.
+        """
+        parts = []
+        for field in dataclasses.fields(self):
+            value = getattr(self, field.name)
+            if value == field.default:
+                continue
+            name = field.name.replace('_', '-')
+            if name == 'use-nipreps-syn-sdc':  # keyed by its qsiprep flag spelling
+                name = 'use-syn-sdc'
+            parts.append(f'{name}=1' if value is True else f'{name}={value}')
+        return parts
+
+    def policy_key(self) -> str:
+        """The canonical serialization of this policy (``''`` for the default)."""
+        return '&'.join(sorted(self.key_parts()))
+
+    def cli_phrase(self) -> str:
+        """The qsiplan CLI flags that select this policy (``''`` for the default)."""
+        flags = []
+        if self.separate_all_dwis:
+            flags.append('--separate-all-dwis')
+        if self.ignore_fieldmaps:
+            flags.append('--ignore-fieldmaps')
+        if self.ignore_shims:
+            flags.append('--ignore-shims')
+        if self.ignore_fov:
+            flags.append('--ignore-fov')
+        if self.ignore_sdc:
+            flags.append('--ignore-sdc')
+        if self.force_t2wreg:
+            flags.append('--force t2wreg')
+        if self.use_synb0:
+            flags.append('--use-synb0')
+        if self.use_nipreps_syn_sdc:
+            flags.append('--use-syn-sdc')
+        if self.distortion_group_merge != 'concat':
+            flags.append(f'--distortion-group-merge {self.distortion_group_merge}')
+        return ' '.join(flags)
 
 
 @dataclasses.dataclass(frozen=True)

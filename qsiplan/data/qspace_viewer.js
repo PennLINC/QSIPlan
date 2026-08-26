@@ -32,6 +32,8 @@
   }
 
   function init(root) {
+    if (root.dataset.qsReady) return;
+    root.dataset.qsReady = "1";
     var src = root.querySelector('script[type="application/json"]');
     if (!src) return;
     var data = JSON.parse(src.textContent);
@@ -508,6 +510,12 @@
   function boot() {
     document.querySelectorAll(".qspace-viewer").forEach(init);
   }
+
+  // The host-page API: interactive hosts re-scan after swapping in new
+  // viewer markup (init is idempotent per element); the embedded boot path
+  // stays for static pages.
+  window.QSIPrepQSpace = { init: init, boot: boot };
+
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot);
   } else {

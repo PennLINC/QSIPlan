@@ -16,13 +16,15 @@ import argparse
 import sys
 
 from qsiplan import (
-    build_dwi_grouping,
     describe_processing,
-    render_html,
+    index_subject,
+    render_explorer_html,
     report_text,
     selection_for_config,
 )
+from qsiplan.explorer import build_for_policy
 from qsiplan.methods import SHORELINE_MODELS
+from qsiplan.models import GroupingPolicy
 from qsiplan.report import default_preview_selections
 
 
@@ -109,9 +111,23 @@ def _build_parser():
     parser.add_argument(
         '--html',
         metavar='PATH',
-        help='Also write a self-contained explanatory HTML page for the grouping. '
-        'With more than one subject, the subject label is inserted before the '
-        'extension.',
+        help='Also write a self-contained explorer HTML page: the grouping plus '
+        'live controls for every grouping-policy and processing-method flag '
+        '(the CLI flags pick the initial state). With more than one subject, '
+        'the subject label is inserted before the extension.',
+    )
+    parser.add_argument(
+        '--serve',
+        action='store_true',
+        help='Serve the explorer live at http://localhost:<port> instead of '
+        'writing files: every control change is answered by the real compiler, '
+        'and flag combinations beyond the embedded grid work too.',
+    )
+    parser.add_argument(
+        '--port',
+        type=int,
+        default=8765,
+        help='Port for --serve (default: 8765).',
     )
     return parser
 
@@ -148,6 +164,30 @@ def main(argv=None):
         print(f'No subjects found in {args.bids_dir}', file=sys.stderr)
         return 1
 
+    policy = GroupingPolicy(
+        separate_all_dwis=args.separate_all_dwis,
+        ignore_fieldmaps=args.ignore_fieldmaps,
+        ignore_shims=args.ignore_shims,
+        ignore_fov=args.ignore_fov,
+        force_t2wreg='t2wreg' in args.force,
+        use_synb0=args.use_synb0,
+        distortion_group_merge=args.distortion_group_merge,
+    )
+
+    if args.serve:
+        if args.html:
+            raise SystemExit('--serve and --html are mutually exclusive')
+        from qsiplan.serve import ExplorerApp, run_server
+
+        app = ExplorerApp(
+            layout,
+            subjects,
+            session_id=args.session_id,
+            base_policy=policy,
+            initial_selection=selections[0] if args.hmc_method else None,
+        )
+        return run_server(app, port=args.port)
+
     exit_code = 0
     for subject in subjects:
         query = {
@@ -163,26 +203,25 @@ def main(argv=None):
             print(f'sub-{subject}: no DWI files found, skipping.\n')
             continue
 
-        grouping = build_dwi_grouping(
-            layout,
-            subject_data,
-            separate_all_dwis=args.separate_all_dwis,
-            ignore_fieldmaps=args.ignore_fieldmaps,
-            ignore_shims=args.ignore_shims,
-            ignore_fov=args.ignore_fov,
-            force_t2wreg='t2wreg' in args.force,
-            use_synb0=args.use_synb0,
-            distortion_group_merge=args.distortion_group_merge,
-            strict=False,
-        )
+        # One fieldmaps-included index pass serves the terminal report and
+        # (via record filtering) every policy the HTML page can select.
+        records, index_issues = index_subject(layout, subject_data)
+        grouping = build_for_policy(records, subject, policy, index_issues)
         print(report_text(grouping))
         for selection in selections:
             print(describe_processing(grouping, selection))
         multi = len(subjects) > 1
         if args.html:
             path = _per_subject_path(args.html, subject, multi)
+            page = render_explorer_html(
+                records,
+                subject,
+                index_issues=index_issues,
+                initial_policy=policy,
+                initial_selection=selections[0] if args.hmc_method else None,
+            )
             with open(path, 'w') as fobj:
-                fobj.write(render_html(grouping, selections=selections))
+                fobj.write(page)
             print(f'sub-{subject}: wrote {path}')
         if grouping.errors:
             exit_code = 1
