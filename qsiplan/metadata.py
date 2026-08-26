@@ -76,7 +76,7 @@ def read_bvals_bvecs(bval_file: str, bvec_file: str):
     it, as three rows of three volumes.
 
     Anything that leaves the gradients unusable - a path that is ``None``
-    (no applicable sidecar), a missing or empty file, unparseable text, or
+    (no applicable sidecar), a missing or empty file, unparsable text, or
     two files that disagree on the volume count - raises ``ValueError``;
     callers treat unreadable gradients as absent.
     """
