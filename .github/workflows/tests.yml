@@ -25,6 +25,15 @@ jobs:
       - name: Install with test extras
         run: pip install -e '.[tests]' pytest-cov
       - name: Run the suite with coverage
-        run: pytest tests --cov=qsiplan --cov-report=term --cov-fail-under=85
+        run: pytest tests --cov=qsiplan --cov-report=term --cov-report=xml --cov-fail-under=85
       - name: Smoke the CLI entry point
         run: qsiplan --help
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          flags: py${{ matrix.python-version }}
+          # The quality gate is pytest's --cov-fail-under; an upload hiccup
+          # must never fail CI.
+          fail_ci_if_error: false

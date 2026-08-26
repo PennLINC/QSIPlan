@@ -1,0 +1,20 @@
+# Codecov behaves as a reporter here, never a gate: the enforced floor is
+# pytest's --cov-fail-under in CI, so both statuses are informational and
+# nothing goes red because of an upload or rounding quirk.
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
+
+comment:
+  layout: "condensed_header, diff, flags"
+  # One comment after all three matrix uploads, not three drafts.
+  after_n_builds: 3
+
+codecov:
+  notify:
+    after_n_builds: 3
