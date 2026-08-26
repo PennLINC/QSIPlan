@@ -1,0 +1,46 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  # The release runs the same suite as every push/PR, re-run on the exact
+  # tagged commit. publish depends on it, so a red tag never reaches PyPI.
+  tests:
+    uses: ./.github/workflows/reusable-tests.yml
+    secrets: inherit
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # hatch-vcs derives the version from the tag
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pipx run build
+      - run: pipx run twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: [tests, build]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/qsiplan
+    permissions:
+      id-token: write  # OIDC token for Trusted Publishing (no stored secret)
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
