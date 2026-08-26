@@ -14,6 +14,8 @@ method combination. Nothing is processed and nothing is written.
 
 import argparse
 import sys
+from functools import partial
+from pathlib import Path
 
 from qsiplan import (
     describe_processing,
@@ -28,12 +30,56 @@ from qsiplan.models import GroupingPolicy
 from qsiplan.report import default_preview_selections
 
 
+def _path_exists(path, parser):
+    """Ensure a given path exists.
+
+    Parameters
+    ----------
+    path : str or None
+        The path to check for existence. If None or the path does not exist, an error is raised.
+    parser : argparse.ArgumentParser
+        The argument parser instance used to raise an error if the path does not exist.
+
+    Returns
+    -------
+    pathlib.Path
+        The absolute path if it exists.
+
+    Raises
+    ------
+    argparse.ArgumentError
+        If the path does not exist or is None.
+    """
+    if path is not None:
+        path = Path(path)
+
+    if path is None or not path.exists():
+        raise parser.error(f"Path does not exist: <{path.resolve()}>.")
+    return path.resolve()
+
+
+def _is_dir(path, parser):
+    """Ensure a given path exists and is a directory."""
+    path = _path_exists(path, parser)
+    if not path.is_dir():
+        raise parser.error(
+            f"Path should point to a directory (or symlink of directory): <{path.absolute()}>."
+        )
+    return str(path)
+
+
 def _build_parser():
     parser = argparse.ArgumentParser(
         prog='qsiplan',
         description=__doc__.splitlines()[0],
     )
-    parser.add_argument('bids_dir', help='Root of the BIDS dataset')
+    IsDir = partial(_is_dir, parser=parser)
+
+    parser.add_argument(
+        'bids_dir',
+        type=IsDir,
+        help='Root of the BIDS dataset',
+    )
     parser.add_argument(
         '--participant-label',
         nargs='+',
