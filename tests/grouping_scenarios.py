@@ -13,9 +13,9 @@ import glob
 import os.path as op
 
 from bids.layout import BIDSLayout
-from niworkflows.utils.testing import generate_bids_skeleton
 
 from qsiplan import build_dwi_grouping
+from qsiplan.utils import generate_bids_skeleton
 
 
 def get_test_data_path():
@@ -155,16 +155,18 @@ def _find_generated(bids_dir, nii_name):
 
 def build_layout(scenario, tmp_path):
     """Materialize a scenario skeleton and return (layout, subject_data)."""
-    from qsiplan.metadata import sibling_bval
-
     bids_dir = tmp_path / scenario
     skeleton = op.join(get_test_data_path(), f'skeleton_grouping_{scenario}.yml')
     generate_bids_skeleton(str(bids_dir), skeleton)
     for nii_name, bval_content in SCENARIO_BVALS.get(scenario, {}).items():
-        with open(sibling_bval(_find_generated(bids_dir, nii_name)), 'w') as fobj:
+        generated_nii = _find_generated(bids_dir, nii_name)
+        bval_file = generated_nii.replace('.nii.gz', '.bval').replace('.nii', '.bval')
+        with open(bval_file, 'w') as fobj:
             fobj.write(bval_content + '\n')
+
     for nii_name, grid_spec in SCENARIO_NIFTIS.get(scenario, {}).items():
         write_test_nifti(_find_generated(bids_dir, nii_name), grid_spec)
+
     layout = BIDSLayout(str(bids_dir), validate=False)
     subject_data = {
         'dwi': sorted(

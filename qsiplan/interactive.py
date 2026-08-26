@@ -30,7 +30,8 @@ from __future__ import annotations
 import dataclasses
 import html
 
-from .metadata import B0_THRESHOLD, read_bvals_bvecs, sibling_bval, sibling_bvec
+from .bids import find_bval, find_bvec
+from .metadata import B0_THRESHOLD, read_bvals_bvecs
 from .methods import reachable_selections
 from .models import CorrectionMethod, DWIGrouping, GroupingPolicy, Provenance
 from .plan import compile_plan
@@ -603,9 +604,11 @@ def _load_gradients(path: str):
     lists. Returning ``None`` on a missing or malformed sidecar lets the
     report degrade to a short notice instead of failing.
     """
+    bval_file = find_bval(path)
+    bvec_file = find_bvec(path)
     try:
-        bvals, bvecs = read_bvals_bvecs(sibling_bval(path), sibling_bvec(path))
-    except (OSError, ValueError):
+        bvals, bvecs = read_bvals_bvecs(bval_file, bvec_file)
+    except ValueError:
         return None
     return bvals.tolist(), bvecs.tolist()
 

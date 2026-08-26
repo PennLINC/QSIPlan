@@ -1,0 +1,123 @@
+import json
+from copy import deepcopy
+from pathlib import Path
+
+import yaml
+
+
+def generate_bids_skeleton(target_path, bids_config):
+    """
+    Converts a BIDS directory in dictionary form to a file structure.
+
+    The BIDS configuration can either be a YAML or JSON file, or :obj:dict: object.
+
+    Parameters
+    ----------
+    target_path : str
+        Path to generate BIDS directory at (must not exist)
+    bids_config : dict or str
+        Configuration on how to create the BIDS directory. Each file entry may
+        carry a ``content`` key, written out by :func:`write_content`; entries
+        without one become zero-byte placeholders.
+    """
+
+    if isinstance(bids_config, dict):
+        # ensure dictionary remains unaltered
+        bids_dict = deepcopy(bids_config)
+    elif isinstance(bids_config, str):
+        bids_config = Path(bids_config).read_text()
+        try:
+            bids_dict = json.loads(bids_config)
+        except json.JSONDecodeError:
+            bids_dict = yaml.safe_load(bids_config)
+
+    _bids_dict = deepcopy(bids_dict)
+    root = Path(target_path).absolute()
+    root.mkdir(parents=True)
+
+    desc = bids_dict.pop('dataset_description', None)
+    if desc is None:
+        # default description
+        desc = {'Name': 'Default', 'BIDSVersion': '1.6.0'}
+    to_json(root / 'dataset_description.json', desc)
+
+    cached_subject_data = None
+    for subject, sessions in bids_dict.items():
+        bids_subject = subject if subject.startswith('sub-') else f'sub-{subject}'
+        subj_path = root / bids_subject
+        subj_path.mkdir(exist_ok=True)
+
+        if sessions == '*':  # special case to copy previous subject data
+            sessions = cached_subject_data.copy()
+
+        if isinstance(sessions, dict):  # single session
+            sessions.update({'session': None})
+            sessions = [sessions]
+
+        cached_subject_data = deepcopy(sessions)
+        for session in sessions:
+            ses_name = session.pop('session', None)
+            if ses_name is not None:
+                bids_session = ses_name if ses_name.startswith('ses-') else f'ses-{ses_name}'
+                bids_prefix = f'{bids_subject}_{bids_session}'
+                curr_path = subj_path / bids_session
+                curr_path.mkdir(exist_ok=True)
+            else:
+                bids_prefix = bids_subject
+                curr_path = subj_path
+
+            # create modalities
+            for modality, files in session.items():
+                modality_path = curr_path / modality
+                modality_path.mkdir(exist_ok=True)
+
+                if isinstance(files, dict):  # single file / metadata combo
+                    files = [files]
+
+                for bids_file in files:
+                    metadata = bids_file.pop('metadata', None)
+                    content = bids_file.pop('content', None)
+                    extension = bids_file.pop('extension', '.nii.gz')
+                    suffix = bids_file.pop('suffix')
+                    entities = combine_entities(**bids_file)
+                    data_file = modality_path / f'{bids_prefix}{entities}_{suffix}{extension}'
+                    if content is None:
+                        data_file.touch()
+                    else:
+                        write_content(data_file, content)
+
+                    if metadata is not None:
+                        out_metadata = data_file.parent / data_file.name.replace(
+                            extension, '.json'
+                        )
+                        to_json(out_metadata, metadata)
+
+    return _bids_dict
+
+
+def write_content(filename, content):
+    """Write the ``content`` a skeleton entry declares for one data file.
+
+    ``content`` is either a string, written verbatim, or a sequence of
+    values written as whitespace-separated text. A flat sequence becomes a
+    single line, as in a ``.bval`` file, and a sequence of sequences becomes
+    one line per row, as in a three-row (x/y/z) ``.bvec`` file.
+    """
+    filename = Path(filename)
+    if not isinstance(content, str):
+        rows = content if content and isinstance(content[0], (list, tuple)) else [content]
+        content = '\n'.join(' '.join(str(value) for value in row) for row in rows)
+    if content and not content.endswith('\n'):
+        content += '\n'
+    filename.write_text(content)
+    return filename
+
+
+def to_json(filename, data):
+    filename = Path(filename)
+    filename.write_text(json.dumps(data))
+    return filename
+
+
+def combine_entities(**entities):
+    return f'_{"_".join([f"{lab}-{val}" for lab, val in entities.items()])}' if entities else ''

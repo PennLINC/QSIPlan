@@ -11,7 +11,6 @@ import os.path as op
 
 from bids.layout import BIDSLayout
 from grouping_scenarios import get_test_data_path, load_scenario
-from niworkflows.utils.testing import generate_bids_skeleton
 
 from qsiplan import (
     CorrectionMethod,
@@ -19,6 +18,8 @@ from qsiplan import (
     concatenation_scheme,
     to_preproc_units,
 )
+from qsiplan.interactive import _load_gradients
+from qsiplan.utils import generate_bids_skeleton
 
 
 def _basenames(value):
@@ -44,6 +45,35 @@ def _load_skeleton(name, tmp_path):
 
 def _units(scenario, tmp_path, backend='fsl', **kwargs):
     return to_preproc_units(load_scenario(scenario, tmp_path, strict=False, **kwargs), backend)
+
+
+def test_nibs_style(tmp_path):
+    """No fieldmaps, two PE directions: one pooled estimation, one output.
+
+    Include complex-valued DWI data and inherited bval and bvec files.
+    """
+    layout, subject_data = _load_skeleton('skeleton_grouping_nibs_style', tmp_path)
+    grouping = build_dwi_grouping(layout, subject_data, strict=False)
+
+    (estimation,) = grouping.estimations.values()
+    assert estimation.pe_axes == {'j'}
+    assert estimation.bidirectional_axes == {'j'}
+
+    (unit,) = to_preproc_units(grouping, 'fsl')
+    assert unit.output_name == 'sub-01'
+    assert unit.has_bidirectional_dwi
+    assert unit.pepolar_fieldmap_type == 'rpe_series'
+    assert len(unit.dwi_files) == 4
+    scheme = concatenation_scheme(grouping, 'fsl')
+    assert scheme == {name: name for name in scheme}
+
+    # The bval/bvec files carry no part- entity, so both parts inherit them.
+    for dwi_file in grouping.dwi_files:
+        bvals, bvecs = _load_gradients(dwi_file)
+        assert bvals == [0.0, 1000.0, 0.0, 1000.0, 0.0, 1000.0]
+        assert bvecs[1] == [1.0, 0.0, 0.0]
+        assert bvecs[3] == [0.0, 1.0, 0.0]
+        assert bvecs[5] == [0.0, 0.0, 1.0]
 
 
 def test_multiped_pools_all_directions(tmp_path):
