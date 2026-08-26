@@ -90,3 +90,5 @@ quote-style = "single"
 
 [tool.codespell]
 skip = '.git,*.html,*.svg,*.lock'
+# te: the TE (echo time) abbreviation in prose and golden reports
+ignore-words-list = 'te'
