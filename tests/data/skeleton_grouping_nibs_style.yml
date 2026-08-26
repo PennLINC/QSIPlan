@@ -1,0 +1,60 @@
+# NIBS-style acquisition: complex-valued (part-mag/part-phase) AP and PA DWI
+# series with no fieldmaps, whose bval/bvec files carry no part- entity and
+# so are inherited by both parts. Expected: one pooled PEPOLAR estimation
+# over the two phase-encoding directions, and one output.
+'01':
+  - anat:
+      - suffix: T1w
+    dwi:
+      - dir: AP
+        part: mag
+        suffix: dwi
+        extension: .nii.gz
+        metadata:
+          PhaseEncodingDirection: 'j-'
+          TotalReadoutTime: 0.05
+      - dir: AP
+        part: phase
+        suffix: dwi
+        extension: .nii.gz
+        metadata:
+          PhaseEncodingDirection: 'j-'
+          TotalReadoutTime: 0.05
+          Units: arbitrary
+      - dir: AP
+        suffix: dwi
+        extension: .bval
+        content: [0, 1000, 0, 1000, 0, 1000]
+      - dir: AP
+        suffix: dwi
+        extension: .bvec
+        content:
+          - [0, 1, 0, 0, 0, 0]
+          - [0, 0, 0, 1, 0, 0]
+          - [0, 0, 0, 0, 0, 1]
+      - dir: PA
+        part: mag
+        suffix: dwi
+        extension: .nii.gz
+        metadata:
+          PhaseEncodingDirection: 'j'
+          TotalReadoutTime: 0.05
+      - dir: PA
+        part: phase
+        suffix: dwi
+        extension: .nii.gz
+        metadata:
+          PhaseEncodingDirection: 'j'
+          TotalReadoutTime: 0.05
+          Units: arbitrary
+      - dir: PA
+        suffix: dwi
+        extension: .bval
+        content: [0, 1000, 0, 1000, 0, 1000]
+      - dir: PA
+        suffix: dwi
+        extension: .bvec
+        content:
+          - [0, 1, 0, 0, 0, 0]
+          - [0, 0, 0, 1, 0, 0]
+          - [0, 0, 0, 0, 0, 1]

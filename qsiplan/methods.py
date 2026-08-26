@@ -17,7 +17,7 @@ from __future__ import annotations
 import dataclasses
 import enum
 
-from .models import CorrectionMethod
+from .models import CorrectionMethod, GroupingPolicy
 
 
 class HmcMethod(enum.StrEnum):
@@ -199,15 +199,13 @@ class MethodSelection:
     corrections - ``(TOPUP,)``, ``(DRBUDDI,)``, or ``(TOPUP, DRBUDDI)`` for
     TOPUP with DRBUDDI refinement. Data-driven methods (GRE fieldmaps, SyN,
     T2Wreg) are chosen per unit by the grouping, not here; the fieldmap-less
-    flags only enable them.
+    flags that enable them live on :class:`~.models.GroupingPolicy` - they
+    change the grouping itself, so they are policy, not selection.
     """
 
     hmc: HmcMethod
     pepolar_tools: tuple[SdcTool, ...]
     shoreline_model: str | None = None
-    use_syn: bool = False
-    use_synb0: bool = False
-    force_t2wreg: bool = False
 
     def __post_init__(self):
         if (self.shoreline_model is not None) != (self.hmc is HmcMethod.SHORELINE):
@@ -260,27 +258,87 @@ class MethodSelection:
         parts.append(f'--sdc-method {"+".join(tool.value for tool in self.pepolar_tools)}')
         return ' '.join(parts)
 
+    def key_parts(self) -> list[str]:
+        """The ``name=value`` parts of this selection's canonical key."""
+        parts = [f'hmc-method={self.hmc.value}']
+        if self.hmc is HmcMethod.SHORELINE:
+            parts.append(f'shoreline-model={self.shoreline_model}')
+        parts.append(f'sdc-method={"+".join(tool.value for tool in self.pepolar_tools)}')
+        return parts
+
     def combination_key(self) -> str:
         """The canonical serialization of this flag combination.
 
         The single spelling shared by every plan provider: it keys the
         embedded payload index in the interactive page today and is the
         query string a live ``/plan`` endpoint would take tomorrow.
+        Parts are sorted so any producer spells a combination one way.
         """
-        parts = [f'hmc-method={self.hmc.value}']
-        if self.hmc is HmcMethod.SHORELINE:
-            parts.append(f'shoreline-model={self.shoreline_model}')
-        parts.append(f'sdc-method={"+".join(tool.value for tool in self.pepolar_tools)}')
-        return '&'.join(parts)
+        return '&'.join(sorted(self.key_parts()))
+
+
+def combined_key(policy, selection: MethodSelection) -> str:
+    """The canonical key for one (grouping policy, method selection) pair.
+
+    The flat address of a full flag combination: sorted, non-default-only
+    ``name=value`` parts from both axes joined with ``&`` - the embedded
+    explorer index's key today, a live ``/plan`` endpoint's query string
+    tomorrow. ``policy`` is a :class:`~.models.GroupingPolicy`.
+    """
+    return '&'.join(sorted(policy.key_parts() + selection.key_parts()))
+
+
+def parse_combined_key(key: str):
+    """Invert :func:`combined_key`: the ``(policy, selection)`` a key names.
+
+    The live endpoint's request parser. Accepts the parts in any order (the
+    canonical spelling is sorted, but a query string should not have to be)
+    and omits behave as defaults, exactly like the CLI. Unknown names or
+    malformed values raise :class:`ValueError` - the server's 400.
+    """
+    policy_fields = {}
+    for field in dataclasses.fields(GroupingPolicy):
+        name = field.name.replace('_', '-')
+        if name == 'use-nipreps-syn-sdc':  # keyed by its qsiprep flag spelling
+            name = 'use-syn-sdc'
+        policy_fields[name] = field
+
+    policy_kwargs = {}
+    hmc = sdc = model = None
+    for part in filter(None, key.split('&')):
+        name, eq, value = part.partition('=')
+        if not eq or not value:
+            raise ValueError(f'Malformed key part: {part!r}')
+        if name == 'hmc-method':
+            hmc = value
+        elif name == 'shoreline-model':
+            model = value
+        elif name == 'sdc-method':
+            sdc = value
+        elif name in policy_fields:
+            field = policy_fields[name]
+            if field.default is False:
+                if value != '1':
+                    raise ValueError(f'{name} takes only the value 1, not {value!r}')
+                policy_kwargs[field.name] = True
+            else:
+                if name == 'distortion-group-merge' and value not in ('concat', 'average', 'none'):
+                    raise ValueError(f'Unknown {name} value: {value!r}')
+                policy_kwargs[field.name] = value
+        else:
+            raise ValueError(f'Unknown key part: {part!r}')
+
+    if hmc is None or sdc is None:
+        raise ValueError('A combined key must include hmc-method and sdc-method.')
+    if model is not None and hmc != 'shoreline':
+        raise ValueError(f'shoreline-model is invalid with hmc-method={hmc}.')
+    selection = selection_for_config(model or hmc, sdc)
+    return GroupingPolicy(**policy_kwargs), selection
 
 
 def selection_for_config(
     hmc_model: str,
     pepolar_method: str | None,
-    *,
-    use_syn: bool = False,
-    use_synb0: bool = False,
-    force_t2wreg: bool = False,
 ) -> MethodSelection:
     """Build a :class:`MethodSelection` from CLI/config vocabulary.
 
@@ -314,9 +372,6 @@ def selection_for_config(
         hmc=hmc,
         pepolar_tools=pepolar_tools,
         shoreline_model=shoreline_model,
-        use_syn=use_syn,
-        use_synb0=use_synb0,
-        force_t2wreg=force_t2wreg,
     )
 
 

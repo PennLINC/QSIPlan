@@ -27,11 +27,13 @@ estimation touches).
 
 from __future__ import annotations
 
+import dataclasses
 import html
 
-from .metadata import B0_THRESHOLD, read_bvals_bvecs, sibling_bval, sibling_bvec
+from .bids import find_bval, find_bvec
+from .metadata import B0_THRESHOLD, read_bvals_bvecs
 from .methods import reachable_selections
-from .models import CorrectionMethod, DWIGrouping, Provenance
+from .models import CorrectionMethod, DWIGrouping, GroupingPolicy, Provenance
 from .plan import compile_plan
 from .report import processing_steps, shell_label
 from .viz.pipeline import _embedded_json, pipeline_assets, pipeline_div, plan_payload
@@ -194,6 +196,14 @@ _CSS = """
   font-family:ui-monospace,Menlo,monospace;display:flex;gap:6px;align-items:center}
 .qsi-grouping .plan-controls select{font:inherit;font-size:12px;color:#0f172a;
   border:1.5px solid #cbd5e1;border-radius:7px;background:#fff;padding:2px 6px}
+.qsi-grouping .plan-controls input[type=checkbox]{accent-color:#0369a1;margin:0}
+.qsi-grouping .plan-controls label.noop{opacity:.5}
+.qsi-grouping .ignore-group{display:flex;align-items:center;gap:4px 10px;flex-wrap:wrap;
+  font-family:ui-monospace,Menlo,monospace;font-size:11.5px;color:#334155;
+  border:1px solid #e2e8f0;border-radius:7px;padding:2px 9px}
+.qsi-grouping .ignore-group .flag-name{color:#334155}
+.qsi-grouping .ignore-group label{gap:4px}
+.qsi-grouping .policy-cli{min-height:15px}
 .qsi-grouping .plan-panel{display:none}
 .qsi-grouping .plan-panel.on{display:block}
 .qsi-grouping .plan-cli{font-size:11.5px;color:#64748b;
@@ -215,51 +225,68 @@ _JS = """
 document.querySelectorAll('.qsi-grouping').forEach(root => {
   // Hover an estimation card or letter chip -> highlight everything that
   // estimation touches (its card, its chips, the groups it corrects).
-  root.querySelectorAll('[data-est]').forEach(el => {
-    const eid = el.dataset.est;
-    el.addEventListener('mouseenter', () => {
-      root.querySelectorAll('[data-est]').forEach(other => {
-        if (other.dataset.est === eid) other.classList.add('hl');
+  // Bound per container so the explorer can re-bind after swapping content.
+  const bindHover = container => {
+    container.querySelectorAll('[data-est]').forEach(el => {
+      const eid = el.dataset.est;
+      el.addEventListener('mouseenter', () => {
+        container.querySelectorAll('[data-est]').forEach(other => {
+          if (other.dataset.est === eid) other.classList.add('hl');
+        });
+      });
+      el.addEventListener('mouseleave', () => {
+        container.querySelectorAll('.hl').forEach(other => other.classList.remove('hl'));
       });
     });
-    el.addEventListener('mouseleave', () => {
-      root.querySelectorAll('.hl').forEach(other => other.classList.remove('hl'));
-    });
-  });
-  // Interactive processing plan: the method controls pick a flag
-  // combination; the provider maps its canonical key to a plan payload and
-  // the diagram re-renders. Today the provider reads the embedded index;
-  // a live host swaps in one that fetches /plan?<key> instead.
-  root.querySelectorAll('.plan-interactive').forEach(section => {
-    const index = JSON.parse(
-      section.querySelector('script.plan-payloads').textContent);
-    const provider = key => Promise.resolve(index[key]);
+  };
+  bindHover(root);
+
+  // Method-control plumbing shared by both interactive modes: gate the SDC
+  // options on the HMC method and spell the selection's canonical key
+  // (sorted name=value parts - the same spelling Python produces).
+  const SDC_OPTIONS = {
+    eddy: ['topup', 'drbuddi', 'topup+drbuddi'],
+    shoreline: ['drbuddi'],
+    tortoise: ['drbuddi'],
+  };
+  const methodControls = section => {
     const hmc = section.querySelector('.ctl-hmc');
     const model = section.querySelector('.ctl-model');
     const modelWrap = section.querySelector('.ctl-model-wrap');
     const sdc = section.querySelector('.ctl-sdc');
+    return {
+      controls: [hmc, model, sdc],
+      sync: () => {
+        const options = SDC_OPTIONS[hmc.value];
+        if (!options.includes(sdc.value)) sdc.value = options[0];
+        [...sdc.options].forEach(option => {
+          option.hidden = !options.includes(option.value);
+          option.disabled = option.hidden;
+        });
+        modelWrap.style.display = hmc.value === 'shoreline' ? '' : 'none';
+      },
+      key: () => {
+        const parts = ['hmc-method=' + hmc.value, 'sdc-method=' + sdc.value];
+        if (hmc.value === 'shoreline') parts.push('shoreline-model=' + model.value);
+        return parts.sort().join('&');
+      },
+    };
+  };
+
+  // Interactive processing plan over one fixed grouping: the method controls
+  // pick a flag combination; the provider maps its canonical key to a plan
+  // payload and the diagram re-renders. Today the provider reads the embedded
+  // index; a live host swaps in one that fetches /plan?<key> instead.
+  root.querySelectorAll('.plan-interactive').forEach(section => {
+    const index = JSON.parse(
+      section.querySelector('script.plan-payloads').textContent);
+    const provider = key => Promise.resolve(index[key]);
+    const methods = methodControls(section);
     const host = section.querySelector('.plan-host');
     const cli = section.querySelector('.plan-cli');
-    const SDC_OPTIONS = {
-      eddy: ['topup', 'drbuddi', 'topup+drbuddi'],
-      shoreline: ['drbuddi'],
-      tortoise: ['drbuddi'],
-    };
-    const currentKey = () => {
-      const parts = ['hmc-method=' + hmc.value];
-      if (hmc.value === 'shoreline') parts.push('shoreline-model=' + model.value);
-      parts.push('sdc-method=' + sdc.value);
-      return parts.join('&');
-    };
     const update = () => {
-      const options = SDC_OPTIONS[hmc.value];
-      if (!options.includes(sdc.value)) sdc.value = options[0];
-      [...sdc.options].forEach(option => {
-        option.hidden = !options.includes(option.value);
-        option.disabled = option.hidden;
-      });
-      modelWrap.style.display = hmc.value === 'shoreline' ? '' : 'none';
-      const key = currentKey();
+      methods.sync();
+      const key = methods.key();
       provider(key).then(payload => {
         if (!payload) return;
         window.QSIPrepPipeline.render(host, payload);
@@ -269,9 +296,108 @@ document.querySelectorAll('.qsi-grouping').forEach(root => {
         });
       });
     };
-    [hmc, model, sdc].forEach(control => control.addEventListener('change', update));
+    methods.controls.forEach(control => control.addEventListener('change', update));
     update();
   });
+
+  // Explorer: both flag axes are live. The policy controls spell a canonical
+  // policy key; its grouping *signature* addresses one embedded rendering
+  // and one set of compiled plans, so no-op flag combinations share content.
+  const indexScript = root.querySelector('script.explorer-index');
+  if (indexScript) {
+    const index = JSON.parse(indexScript.textContent);
+    const view = root.querySelector('.grouping-view');
+    const notes = root.querySelector('.grouping-notes');
+    const policyCtls = [...root.querySelectorAll('.ctl-policy')];
+    const policyCli = root.querySelector('.policy-cli');
+    const section = root.querySelector('.plan-explorer');
+    const methods = methodControls(section);
+    const host = section.querySelector('.plan-host');
+    const cli = section.querySelector('.plan-cli');
+    const prose = section.querySelector('.prose-host');
+
+    const policyKey = (overrideCtl, overrideValue) => {
+      const parts = [];
+      policyCtls.forEach(ctl => {
+        let value;
+        if (ctl === overrideCtl) value = overrideValue;
+        else if (ctl.type === 'checkbox') value = ctl.checked ? ctl.dataset.part : '';
+        else value = ctl.value;
+        if (value) parts.push(value);
+      });
+      return parts.sort().join('&');
+    };
+    // Grey out any policy control whose every alternative state maps to the
+    // grouping already shown: the flag exists, but for this dataset it
+    // changes nothing.
+    const markNoops = sig => {
+      policyCtls.forEach(ctl => {
+        const alts = ctl.type === 'checkbox'
+          ? [policyKey(ctl, ctl.checked ? '' : ctl.dataset.part)]
+          : [...ctl.options].filter(option => option.value !== ctl.value)
+              .map(option => policyKey(ctl, option.value));
+        const noop = alts.every(key => (index.policies[key] || {}).sig === sig);
+        const label = ctl.closest('label');
+        label.classList.toggle('noop', noop);
+        label.title = noop ? 'No effect for this dataset' : '';
+      });
+    };
+
+    // The view provider: resolve a (policy key, selection key) pair to the
+    // grouping rendering plus the compiled plan payload. The embedded index
+    // is the first and only source on a static page; when the page carries a
+    // live endpoint (the served mode), misses are fetched from the real
+    // compiler and cached back into the index. The fetch query IS the
+    // combined canonical key - the same spelling either provider consumes.
+    const resolveView = (pkey, sig, skey) => {
+      const cachedGrouping = index.groupings[sig];
+      const cachedPayload = (index.plans[sig] || {})[skey];
+      if (cachedGrouping && cachedPayload) {
+        return Promise.resolve({grouping: cachedGrouping, payload: cachedPayload});
+      }
+      if (!index.api) return Promise.resolve(null);
+      const query = [pkey, skey].filter(Boolean).join('&');
+      return fetch(index.api + '?' + query)
+        .then(response => {
+          if (!response.ok) throw new Error('view failed: ' + response.status);
+          return response.json();
+        })
+        .then(data => {
+          index.groupings[sig] = data.grouping;
+          (index.plans[sig] = index.plans[sig] || {})[skey] = data.payload;
+          return {grouping: data.grouping, payload: data.payload};
+        });
+    };
+
+    let shownSig = null;
+    let latest = 0;
+    const update = () => {
+      methods.sync();
+      const pkey = policyKey();
+      const policy = index.policies[pkey];
+      if (!policy) return;
+      policyCli.textContent = policy.cli || '(defaults)';
+      markNoops(policy.sig);
+      const ticket = ++latest;
+      resolveView(pkey, policy.sig, methods.key()).then(resolved => {
+        if (!resolved || ticket !== latest) return;
+        if (policy.sig !== shownSig) {
+          shownSig = policy.sig;
+          view.innerHTML = resolved.grouping.view;
+          notes.innerHTML = resolved.grouping.notes;
+          bindHover(view);
+          if (window.QSIPrepQSpace) window.QSIPrepQSpace.boot();
+        }
+        window.QSIPrepPipeline.render(host, resolved.payload);
+        cli.textContent = resolved.payload.selection.label + '  ('
+          + resolved.payload.selection.cli + (policy.cli ? ' ' + policy.cli : '') + ')';
+        prose.innerHTML = resolved.payload.prose || '';
+      });
+    };
+    [...policyCtls, ...methods.controls].forEach(
+      control => control.addEventListener('change', update));
+    update();
+  }
 });
 """
 
@@ -318,10 +444,18 @@ def _badge(letter: str, stroke: str, eid: str, inline: bool = True) -> str:
     )
 
 
-def _header(grouping: DWIGrouping, past: bool = False) -> list[str]:
+def _tagline(grouping: DWIGrouping) -> str:
     n_scans = len(grouping.dwi_files)
     n_out = len(grouping.concatenation_groups)
     n_est = len(grouping.estimations)
+    return (
+        f'<p class="tagline">{n_scans} DWI scan{"s" if n_scans != 1 else ""} &rarr; '
+        f'{n_out} preprocessed output file{"s" if n_out != 1 else ""}, using '
+        f'{n_est} fieldmap estimation{"s" if n_est != 1 else ""}</p>'
+    )
+
+
+def _legend_line() -> str:
     legend = ' '.join(
         f'<span class="chip" style="background:{fill};border-color:{stroke}">{label}</span>'
         for label, (fill, stroke) in [
@@ -331,16 +465,19 @@ def _header(grouping: DWIGrouping, past: bool = False) -> list[str]:
             ('from IntendedFor (deprecated)', _PROVENANCE_COLORS['intendedfor']),
         ]
     )
+    return f'<p class="legend">Colors show where each decision came from:&nbsp; {legend}</p>'
+
+
+def _title(subject_id: str, past: bool = False) -> str:
     processed = 'processed' if past else 'will process'
+    return f'<h1>How QSIPrep {processed} sub-{_esc(subject_id)}&rsquo;s diffusion data</h1>'
+
+
+def _header(grouping: DWIGrouping, past: bool = False) -> list[str]:
     return [
-        '<header>'
-        f'<h1>How QSIPrep {processed} sub-{_esc(grouping.subject_id)}&rsquo;s '
-        'diffusion data</h1>',
-        f'<p class="tagline">{n_scans} DWI scan{"s" if n_scans != 1 else ""} &rarr; '
-        f'{n_out} preprocessed output file{"s" if n_out != 1 else ""}, using '
-        f'{n_est} fieldmap estimation{"s" if n_est != 1 else ""}</p>',
-        f'<p class="legend">Colors show where each decision came from:&nbsp; {legend}</p>'
-        '</header>',
+        '<header>' + _title(grouping.subject_id, past),
+        _tagline(grouping),
+        _legend_line() + '</header>',
     ]
 
 
@@ -472,9 +609,11 @@ def _load_gradients(path: str):
     lists. Returning ``None`` on a missing or malformed sidecar lets the
     report degrade to a short notice instead of failing.
     """
+    bval_file = find_bval(path)
+    bvec_file = find_bvec(path)
     try:
-        bvals, bvecs = read_bvals_bvecs(sibling_bval(path), sibling_bvec(path))
-    except (OSError, ValueError):
+        bvals, bvecs = read_bvals_bvecs(bval_file, bvec_file)
+    except ValueError:
         return None
     return bvals.tolist(), bvecs.tolist()
 
@@ -623,8 +762,12 @@ def _plan_panel(grouping: DWIGrouping, selection) -> str:
     )
 
 
-def _plan_controls(selections) -> str:
-    """The --hmc-method/--shoreline-model/--sdc-method dropdown row."""
+def _plan_controls(selections, initial=None) -> str:
+    """The --hmc-method/--shoreline-model/--sdc-method dropdown row.
+
+    ``initial`` (a :class:`~.methods.MethodSelection`) preselects the
+    options; the default is each dropdown's first entry.
+    """
     hmc_values = list(dict.fromkeys(sel.hmc.value for sel in selections))
     model_values = list(
         dict.fromkeys(sel.shoreline_model for sel in selections if sel.shoreline_model)
@@ -633,15 +776,23 @@ def _plan_controls(selections) -> str:
         dict.fromkeys('+'.join(tool.value for tool in sel.pepolar_tools) for sel in selections)
     )
 
-    def options(values):
-        return ''.join(f'<option value="{_esc(v)}">{_esc(v)}</option>' for v in values)
+    def options(values, chosen=None):
+        return ''.join(
+            f'<option value="{_esc(v)}"{" selected" if v == chosen else ""}>{_esc(v)}</option>'
+            for v in values
+        )
 
+    chosen_hmc = initial.hmc.value if initial else None
+    chosen_model = initial.shoreline_model if initial else None
+    chosen_sdc = '+'.join(tool.value for tool in initial.pepolar_tools) if initial else None
     return (
         '<div class="plan-controls">'
-        f'<label>--hmc-method <select class="ctl-hmc">{options(hmc_values)}</select></label>'
+        f'<label>--hmc-method <select class="ctl-hmc">{options(hmc_values, chosen_hmc)}'
+        '</select></label>'
         '<label class="ctl-model-wrap">--shoreline-model '
-        f'<select class="ctl-model">{options(model_values)}</select></label>'
-        f'<label>--sdc-method <select class="ctl-sdc">{options(sdc_values)}</select></label>'
+        f'<select class="ctl-model">{options(model_values, chosen_model)}</select></label>'
+        f'<label>--sdc-method <select class="ctl-sdc">{options(sdc_values, chosen_sdc)}'
+        '</select></label>'
         '</div>'
     )
 
@@ -716,6 +867,217 @@ def _body(grouping: DWIGrouping, letters: dict[str, str], past: bool, selections
     return ''.join(parts)
 
 
+def _letters(grouping: DWIGrouping) -> dict[str, str]:
+    """Estimation id -> display letter (A, B, ...)."""
+    return {eid: chr(ord('A') + index) for index, eid in enumerate(sorted(grouping.estimations))}
+
+
+def _grouping_view(grouping: DWIGrouping) -> str:
+    """The policy-dependent middle of the page: counts, fieldmaps, outputs.
+
+    Everything here is a pure function of the grouping, so the explorer
+    embeds one copy per *distinct* grouping and swaps it wholesale when the
+    policy controls select a different one.
+    """
+    letters = _letters(grouping)
+    parts = [_tagline(grouping)]
+    parts.extend(_estimation_cards(grouping, letters))
+    parts.extend(_output_boxes(grouping, letters))
+    return ''.join(parts)
+
+
+def _policy_controls(policy: GroupingPolicy) -> str:
+    """The grouping-policy control row, mirroring qsiprep's policy flags.
+
+    Each control carries the ``name=value`` part it contributes to the
+    canonical policy key (checkboxes via ``data-part``, selects via their
+    option values), so the page script can spell any combination without
+    knowing the flags. ``policy`` preselects the initial state.
+
+    The layout follows qsiprep's real CLI: the grouping-related ``--ignore``
+    values (``fieldmaps``/``shims``/``fov``) are checkboxes grouped under one
+    ``--ignore`` flag - it takes a space-delimited list, not one flag per
+    value - and the fieldmap-less methods are the mutually exclusive
+    ``--use-syn-sdc`` / ``--use-synb0`` / ``--force t2wreg``.
+    """
+
+    def box(part, label, checked):
+        return (
+            f'<label><input type="checkbox" class="ctl-policy" data-part="{part}"'
+            f'{" checked" if checked else ""}> {label}</label>'
+        )
+
+    def option(value, label, selected):
+        return f'<option value="{value}"{" selected" if selected else ""}>{label}</option>'
+
+    fieldmapless = (
+        't2wreg'
+        if policy.force_t2wreg
+        else 'synb0'
+        if policy.use_synb0
+        else 'syn'
+        if policy.use_nipreps_syn_sdc
+        else ''
+    )
+    ignore_group = (
+        '<span class="ignore-group"><span class="flag-name">--ignore</span>'
+        + box('ignore-fieldmaps=1', 'fieldmaps', policy.ignore_fieldmaps)
+        + box('ignore-pepolar-dwis=1', 'pepolar-dwis', policy.ignore_pepolar_dwis)
+        + box('ignore-shims=1', 'shims', policy.ignore_shims)
+        + box('ignore-fov=1', 'fov', policy.ignore_fov)
+        + '</span>'
+    )
+    merge = policy.distortion_group_merge
+    return (
+        '<div class="plan-controls policy-controls">'
+        + box('separate-all-dwis=1', '--separate-all-dwis', policy.separate_all_dwis)
+        + ignore_group
+        + '<label>fieldmap-less <select class="ctl-policy">'
+        + option('', 'auto', not fieldmapless)
+        + option('use-syn-sdc=1', '--use-syn-sdc', fieldmapless == 'syn')
+        + option('use-synb0=1', '--use-synb0', fieldmapless == 'synb0')
+        + option('force-t2wreg=1', '--force t2wreg', fieldmapless == 't2wreg')
+        + '</select></label>'
+        + '<label>--distortion-group-merge <select class="ctl-policy">'
+        + option('', 'concat', merge == 'concat')
+        + option('distortion-group-merge=average', 'average', merge == 'average')
+        + option('distortion-group-merge=none', 'none', merge == 'none')
+        + '</select></label></div>'
+    )
+
+
+def explorer_view(grouping: DWIGrouping, selection) -> dict:
+    """The (grouping rendering, compiled plan) view record for one combination.
+
+    The provider contract's unit of exchange: whatever produces it - the
+    static generator embedding it, or the live server computing it on
+    request - the page consumes exactly this shape.
+    """
+    payload = plan_payload(grouping, compile_plan(grouping, selection))
+    payload['prose'] = _prose_steps(grouping, selection)
+    return {
+        'grouping': {
+            'view': _grouping_view(grouping),
+            'notes': ''.join(_issue_notes(grouping)),
+        },
+        'payload': payload,
+    }
+
+
+def render_explorer_html(
+    records,
+    subject_id: str,
+    *,
+    index_issues=(),
+    selections=None,
+    initial_policy: GroupingPolicy | None = None,
+    initial_selection=None,
+    live_endpoint: str | None = None,
+    grid=None,
+) -> str:
+    """A standalone explorer page where both flag axes are live.
+
+    The policy controls regroup the data: the embedded index maps every
+    reachable policy's canonical key to a grouping *signature*, and holds one
+    rendering plus one set of compiled plans per distinct signature - flag
+    combinations that are no-ops for this dataset collapse together and
+    their controls are greyed out. The method controls re-render the
+    processing plan exactly as on the single-grouping page.
+
+    ``records``/``index_issues`` must come from a fieldmaps-included
+    :func:`~.metadata.index_subject` pass; the ``--ignore-fieldmaps``
+    combinations are produced by filtering, not re-indexing.
+
+    With ``live_endpoint`` (the served mode), the embedded index carries only
+    the initial combination's content and the endpoint URL; the page fetches
+    every other view from the live compiler on demand, filling the index as
+    its cache. The policy-key -> signature map is always embedded either way,
+    so the no-op greying works offline and online alike. A caller that
+    already built the :class:`~.explorer.PolicyGrid` (the server) passes it
+    as ``grid``; it must have been built with ``base=initial_policy``.
+    """
+    from .explorer import build_policy_grid
+
+    selections = list(selections) if selections is not None else reachable_selections()
+    initial_policy = initial_policy if initial_policy is not None else GroupingPolicy()
+    if initial_policy.force_t2wreg and initial_policy.use_synb0:
+        # The grid keys the fieldmap-less methods as one axis; layering them
+        # resolves to T2Wreg (matching resolve_fieldmapless's precedence).
+        initial_policy = dataclasses.replace(initial_policy, use_synb0=False)
+
+    if grid is None:
+        grid = build_policy_grid(
+            records, subject_id, base=initial_policy, index_issues=index_issues
+        )
+    initial_signature = grid.policy_index[initial_policy.policy_key()]
+
+    groupings_embed = {}
+    plans = {}
+    if live_endpoint is None:
+        embed_items = grid.groupings.items()
+        embed_selections = selections
+    else:
+        embed_items = [(initial_signature, grid.groupings[initial_signature])]
+        embed_selections = [initial_selection if initial_selection is not None else selections[0]]
+    for signature, grouping in embed_items:
+        by_selection = {}
+        for selection in embed_selections:
+            view = explorer_view(grouping, selection)
+            by_selection[selection.combination_key()] = view['payload']
+            groupings_embed[signature] = view['grouping']
+        plans[signature] = by_selection
+
+    page_index = {
+        'policies': {
+            key: {'sig': signature, 'cli': grid.policy_cli[key]}
+            for key, signature in grid.policy_index.items()
+        },
+        'groupings': groupings_embed,
+        'plans': plans,
+    }
+    if live_endpoint is not None:
+        page_index['api'] = live_endpoint
+    initial = groupings_embed[initial_signature]
+
+    body = ''.join(
+        [
+            f'<header>{_title(subject_id)}{_legend_line()}</header>',
+            '<section><h2>Grouping options &mdash; how the scans are grouped</h2>',
+            _policy_controls(initial_policy),
+            '<p class="plan-cli policy-cli"></p></section>',
+            f'<div class="grouping-view">{initial["view"]}</div>',
+            '<section class="plan-explorer">',
+            '<h2>Step 3 &mdash; Processing: what will happen</h2>',
+            _plan_controls(selections, initial=initial_selection),
+            '<p class="plan-cli"></p>',
+            '<div class="pipeline-viewer plan-host"></div>',
+            '<details class="plan-prose"><summary>Step-by-step description</summary>'
+            '<div class="prose-host"></div></details>',
+            '</section>',
+            f'<div class="grouping-notes">{initial["notes"]}</div>',
+            '<script type="application/json" class="explorer-index">'
+            f'{_embedded_json(page_index)}</script>',
+        ]
+    )
+    viewer_css, viewer_js = viewer_assets()
+    plan_css, plan_js = pipeline_assets()
+    fragment = (
+        f'<style>{_CSS}\n{viewer_css}\n{plan_css}</style>'
+        f'<div class="{ROOT_CLASS}">{body}</div>'
+        f'<script>{viewer_js}</script>'
+        f'<script>{plan_js}</script>'
+        f'<script>{_JS}</script>'
+    )
+    return (
+        '<!doctype html>\n'
+        '<html lang="en"><head><meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">\n'
+        f'<title>DWI grouping explorer for sub-{_esc(subject_id)}</title>\n'
+        '<style>body{margin:0}</style></head>\n'
+        f'<body>{fragment}</body></html>'
+    )
+
+
 def _fragment(grouping: DWIGrouping, past: bool, selections=()) -> str:
     """The scoped, self-contained grouping widget: styles + markup + scripts.
 
@@ -726,9 +1088,7 @@ def _fragment(grouping: DWIGrouping, past: bool, selections=()) -> str:
     vs plan tense (a run that has not). ``selections`` are the method
     selections whose processing plans the page shows.
     """
-    letters = {
-        eid: chr(ord('A') + index) for index, eid in enumerate(sorted(grouping.estimations))
-    }
+    letters = _letters(grouping)
     viewer_css, viewer_js = viewer_assets()
     plan_css, plan_js = pipeline_assets()
     return (

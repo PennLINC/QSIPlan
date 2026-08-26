@@ -1,0 +1,164 @@
+"""Enumerate the grouping-policy grid behind the interactive explorer page.
+
+A full flag combination factors into two pure stages: a
+:class:`~.models.GroupingPolicy` turns indexed records into a grouping, and a
+:class:`~.methods.MethodSelection` turns a grouping into an execution plan.
+The explorer page makes both axes live. The method axis is small and always
+embeddable; the policy axis is a grid of CLI flags whose combinations mostly
+collapse for any given dataset (no fieldmaps means ``--ignore fieldmaps``
+changes nothing), so this module enumerates the grid once at generation time
+and dedupes it by *grouping content*: policies that produce identical
+groupings share one signature, one embedded rendering, and one set of
+compiled plans.
+
+The records are indexed once, with fieldmaps included -
+``ignore_fieldmaps`` combinations are produced by filtering the record list,
+never by re-reading the dataset.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import hashlib
+import itertools
+import json
+
+from .inference import build_grouping
+from .models import DWIGrouping, FileRecord, GroupingPolicy
+
+
+def reachable_policies(base: GroupingPolicy | None = None) -> list[GroupingPolicy]:
+    """Every policy the explorer page's controls can select.
+
+    The grid mirrors the CLI's policy flags: the five boolean toggles
+    (``--separate-all-dwis`` and the ``--ignore`` values fieldmaps/pepolar-dwis/
+    shims/fov), the mutually exclusive fieldmap-less methods as one axis
+    (automatic, SyN, SyNb0, forced T2Wreg - layering them is reachable at the
+    CLI but resolves to one of these), and the distortion-group merge strategy.
+    The one field outside the grid (``ignore_sdc``) carries ``base``'s value
+    through every combination.
+    """
+    base = base if base is not None else GroupingPolicy()
+    policies = []
+    for (
+        separate,
+        no_fmaps,
+        no_pepolar,
+        no_shims,
+        no_fov,
+        fieldmapless,
+        merge,
+    ) in itertools.product(
+        (False, True),
+        (False, True),
+        (False, True),
+        (False, True),
+        (False, True),
+        ('auto', 'syn', 'synb0', 't2wreg'),
+        ('concat', 'average', 'none'),
+    ):
+        policies.append(
+            dataclasses.replace(
+                base,
+                separate_all_dwis=separate,
+                ignore_fieldmaps=no_fmaps,
+                ignore_pepolar_dwis=no_pepolar,
+                ignore_shims=no_shims,
+                ignore_fov=no_fov,
+                use_nipreps_syn_sdc=fieldmapless == 'syn',
+                force_t2wreg=fieldmapless == 't2wreg',
+                use_synb0=fieldmapless == 'synb0',
+                distortion_group_merge=merge,
+            )
+        )
+    return policies
+
+
+def grouping_signature(grouping: DWIGrouping) -> str:
+    """Content hash of a grouping's structure, ignoring the policy that built it.
+
+    Policies sharing a signature produced literally the same grouping. This
+    is the explorer's join key: toggles that are no-ops for a dataset
+    collapse onto one signature, so renderings are embedded and plans
+    compiled once per distinct grouping rather than once per policy. The
+    policy field is excluded - it records which flags *asked* for the
+    grouping, not what the grouping *is*.
+    """
+    projection = grouping.to_dict()
+    del projection['policy']
+    serialized = json.dumps(projection, sort_keys=True, default=str)
+    return hashlib.sha1(serialized.encode(), usedforsecurity=False).hexdigest()[:10]
+
+
+def drop_fieldmaps(records: list[FileRecord], index_issues=()) -> tuple[list[FileRecord], list]:
+    """The record list as ``--ignore-fieldmaps`` indexing would have built it.
+
+    Filters out the fmap/ records and the indexing issues that only concern
+    them, so one fieldmaps-included index pass serves both settings.
+    """
+    fmap_paths = {record.path for record in records if record.datatype == 'fmap'}
+    kept_records = [record for record in records if record.datatype != 'fmap']
+    kept_issues = [
+        issue
+        for issue in index_issues
+        if not (issue.files and all(path in fmap_paths for path in issue.files))
+    ]
+    return kept_records, kept_issues
+
+
+def build_for_policy(
+    records: list[FileRecord],
+    subject_id: str,
+    policy: GroupingPolicy,
+    index_issues=(),
+) -> DWIGrouping:
+    """One grouping under one policy, from a fieldmaps-included index."""
+    index_issues = list(index_issues)
+    if policy.ignore_fieldmaps:
+        records, index_issues = drop_fieldmaps(records, index_issues)
+    return build_grouping(
+        records,
+        subject_id=subject_id,
+        **dataclasses.asdict(policy),
+        extra_issues=index_issues,
+    )
+
+
+@dataclasses.dataclass(frozen=True)
+class PolicyGrid:
+    """The deduped policy grid for one subject.
+
+    ``policy_index`` maps every reachable policy's canonical key to its
+    grouping signature; ``policy_cli`` maps it to the CLI phrase that selects
+    it; ``groupings`` holds one representative grouping per distinct
+    signature.
+    """
+
+    policy_index: dict[str, str]
+    policy_cli: dict[str, str]
+    groupings: dict[str, DWIGrouping]
+
+
+def build_policy_grid(
+    records: list[FileRecord],
+    subject_id: str,
+    *,
+    base: GroupingPolicy | None = None,
+    index_issues=(),
+) -> PolicyGrid:
+    """Build and dedupe a grouping for every reachable policy.
+
+    ``records`` must come from an index pass *with* fieldmaps (see
+    :func:`drop_fieldmaps`); ``index_issues`` are that pass's issues.
+    """
+    policy_index: dict[str, str] = {}
+    policy_cli: dict[str, str] = {}
+    groupings: dict[str, DWIGrouping] = {}
+    for policy in reachable_policies(base):
+        grouping = build_for_policy(records, subject_id, policy, index_issues)
+        signature = grouping_signature(grouping)
+        key = policy.policy_key()
+        policy_index[key] = signature
+        policy_cli[key] = policy.cli_phrase()
+        groupings.setdefault(signature, grouping)
+    return PolicyGrid(policy_index=policy_index, policy_cli=policy_cli, groupings=groupings)

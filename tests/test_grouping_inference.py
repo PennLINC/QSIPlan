@@ -115,6 +115,40 @@ def test_curated_b0field(tmp_path):
     assert not grouping.issues
 
 
+def test_hcp_style_ignore_pepolar_dwis(tmp_path):
+    """--ignore pepolar-dwis drops the inferred DWI-DWI PEPOLAR field."""
+    grouping = load_scenario('hcp_style', tmp_path, ignore_pepolar_dwis=True)
+    # auto+pepolar+j was sourced entirely from DWIs; with no T2w to fall back
+    # to, the (still-present) series are simply left uncorrected.
+    assert not grouping.estimations
+    assert set(grouping.application.values()) == {None}
+    assert len(grouping.dwi_files) == 4
+    assert not grouping.errors
+
+
+def test_ignore_pepolar_dwis_overrides_curation(tmp_path):
+    """It drops a curated DWI-only PEPOLAR pairing too - warning, not error."""
+    grouping = load_scenario('cross_axis_b0field', tmp_path, ignore_pepolar_dwis=True)
+    assert not grouping.estimations
+    assert set(grouping.application.values()) == {None}
+    assert 'pepolar-dwis-ignored' in issue_codes(grouping.issues)
+    # The now-unset curated B0FieldSource is honored, not flagged unresolvable.
+    assert 'unresolvable-b0fieldsource' not in issue_codes(grouping.issues)
+    assert not grouping.errors
+
+
+def test_ignore_pepolar_dwis_keeps_dwi_plus_fmap(tmp_path):
+    """A DWI paired with a fmap/ EPI (not another DWI) survives the filter."""
+    grouping = load_scenario('curated_b0field', tmp_path, ignore_pepolar_dwis=True)
+    (estimation,) = grouping.estimations.values()
+    assert estimation.method is CorrectionMethod.PEPOLAR
+    assert sorted(basenames(estimation.sources)) == [
+        'sub-01_dir-AP_dwi.nii.gz',
+        'sub-01_dir-PA_epi.nii.gz',
+    ]
+    assert not grouping.errors
+
+
 def test_intendedfor_superseded(tmp_path):
     """A fmap with both B0FieldIdentifier and IntendedFor uses B0Field only."""
     grouping = load_scenario('intendedfor_superseded', tmp_path)

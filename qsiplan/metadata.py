@@ -22,12 +22,15 @@ placeholders - and the downstream checks skip undetermined values.
 
 from __future__ import annotations
 
+import io
 import os.path as op
 import re
+from pathlib import Path
 
 import numpy as np
 from bids.layout import parse_file_entities
 
+from .bids import find_bval
 from .models import READOUT_TOLERANCE, DistortionSignature, FileRecord, GridInfo
 from .validation import GroupingIssue, warning
 
@@ -67,34 +70,44 @@ def unique_bvals(bvals, tol: float = 20.0):
 def read_bvals_bvecs(bval_file: str, bvec_file: str):
     """``(bvals, bvecs)`` arrays from sidecar files, FSL row-form transposed.
 
-    Mirrors the dipy reader this replaced: bvals flatten to ``(N,)``, a 3xN
-    bvec table becomes ``(N, 3)``, and a volume-count mismatch raises
-    ``ValueError`` (callers treat unreadable gradients as absent).
+    Mirrors the dipy reader this replaced: bvals flatten to ``(N,)`` and the
+    3xN bvec table FSL writes becomes ``(N, 3)``. The already-transposed Nx3
+    form is accepted too, except that a 3x3 table is read the way FSL wrote
+    it, as three rows of three volumes.
+
+    Anything that leaves the gradients unusable - a path that is ``None``
+    (no applicable sidecar), a missing or empty file, unparsable text, or
+    two files that disagree on the volume count - raises ``ValueError``;
+    callers treat unreadable gradients as absent.
     """
-    bvals = np.loadtxt(bval_file).reshape(-1)
-    bvecs = np.atleast_2d(np.loadtxt(bvec_file))
-    if bvecs.shape[0] == 3 and bvecs.shape[1] != 3:
+    bvals = _load_gradient_table(bval_file, 'bval').reshape(-1)
+    bvecs = _load_gradient_table(bvec_file, 'bvec')
+    if bvecs.shape[0] == 3 and bvecs.shape[1] == bvals.size:
         bvecs = bvecs.T
     if bvecs.shape != (bvals.size, 3):
         raise ValueError(f'{bvec_file} has shape {bvecs.shape}, expected ({bvals.size}, 3)')
     return bvals, bvecs
 
 
-def _sibling(nii_file: str, ext: str) -> str:
-    for nii_ext in ('.nii.gz', '.nii'):
-        if nii_file.endswith(nii_ext):
-            return nii_file[: -len(nii_ext)] + ext
-    return op.splitext(nii_file)[0] + ext
+def _load_gradient_table(path: str | None, label: str):
+    """One ``.bval``/``.bvec`` file as a float array, or ``ValueError``.
 
-
-def sibling_bval(nii_file: str) -> str:
-    """The FSL ``.bval`` sibling path for a BIDS DWI nii."""
-    return _sibling(nii_file, '.bval')
-
-
-def sibling_bvec(nii_file: str) -> str:
-    """The FSL ``.bvec`` sibling path for a BIDS DWI nii."""
-    return _sibling(nii_file, '.bvec')
+    ``np.loadtxt`` reports an empty file with a warning and an empty array
+    rather than an error, and the zero-byte placeholders in test skeletons
+    and docs builds hit that path constantly, so emptiness is checked here.
+    """
+    if path is None:
+        raise ValueError(f'No {label} file applies to this image.')
+    try:
+        text = Path(path).read_text()
+    except OSError as exc:
+        raise ValueError(f'{path} could not be read: {exc}') from exc
+    if not text.strip():
+        raise ValueError(f'{path} is empty.')
+    try:
+        return np.loadtxt(io.StringIO(text), ndmin=2)
+    except ValueError as exc:
+        raise ValueError(f'{path} could not be parsed as a gradient table: {exc}') from exc
 
 
 def evaluate_shells(
@@ -148,8 +161,9 @@ def _read_gradients(
     Missing or unreadable b-values (docs builds, test skeletons) leave
     everything undetermined rather than guessing.
     """
+    bval_file = find_bval(nii_file)
     try:
-        bvals = np.loadtxt(sibling_bval(nii_file)).reshape(-1)
+        bvals = np.loadtxt(bval_file).reshape(-1)
     except (OSError, ValueError):
         return None, (), None
     if bvals.size == 0:

@@ -74,6 +74,69 @@ class TestDeriveOutputName:
         assert derive_output_name([f'/d/sub-1/dwi/sub-1_dir-AP_dwi{extension}']) == 'sub-1_dir-AP'
 
 
+class TestReadBvalsBvecs:
+    """The FSL gradient reader (a replacement for dipy's ``read_bvals_bvecs``)."""
+
+    @staticmethod
+    def _write(tmp_path, bval_text, bvec_text):
+        (tmp_path / 'x.bval').write_text(bval_text)
+        (tmp_path / 'x.bvec').write_text(bvec_text)
+        return str(tmp_path / 'x.bval'), str(tmp_path / 'x.bvec')
+
+    def test_row_form_is_transposed(self, tmp_path):
+        from qsiplan.metadata import read_bvals_bvecs
+
+        bvals, bvecs = read_bvals_bvecs(*self._write(tmp_path, '0 1000\n', '0 1\n0 0\n0 0\n'))
+        assert bvals.tolist() == [0.0, 1000.0]
+        assert bvecs.tolist() == [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]
+
+    def test_column_form_is_kept(self, tmp_path):
+        """A table already written one volume per row needs no transpose."""
+        from qsiplan.metadata import read_bvals_bvecs
+
+        _, bvecs = read_bvals_bvecs(*self._write(tmp_path, '0 1000\n', '0 0 0\n1 0 0\n'))
+        assert bvecs.tolist() == [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]
+
+    def test_three_volumes_read_as_rows(self, tmp_path):
+        """A 3x3 table fits both forms; FSL's row form wins."""
+        from qsiplan.metadata import read_bvals_bvecs
+
+        _, bvecs = read_bvals_bvecs(
+            *self._write(tmp_path, '0 1000 1000\n', '0 1 0\n0 0 1\n0 0 0\n')
+        )
+        assert bvecs.tolist() == [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+
+    def test_single_volume(self, tmp_path):
+        from qsiplan.metadata import read_bvals_bvecs
+
+        bvals, bvecs = read_bvals_bvecs(*self._write(tmp_path, '0\n', '0\n0\n0\n'))
+        assert bvals.tolist() == [0.0]
+        assert bvecs.tolist() == [[0.0, 0.0, 0.0]]
+
+    def test_absent_sidecar(self, tmp_path):
+        """``find_bval``/``find_bvec`` return None when nothing applies."""
+        from qsiplan.metadata import read_bvals_bvecs
+
+        bval_file, bvec_file = self._write(tmp_path, '0 1000\n', '0 1\n0 0\n0 0\n')
+        with pytest.raises(ValueError, match='No bvec file'):
+            read_bvals_bvecs(bval_file, None)
+        with pytest.raises(ValueError, match='could not be read'):
+            read_bvals_bvecs(str(tmp_path / 'missing.bval'), bvec_file)
+
+    def test_empty_placeholder(self, tmp_path):
+        """Skeletons and docs builds leave zero-byte .bval files behind."""
+        from qsiplan.metadata import read_bvals_bvecs
+
+        with pytest.raises(ValueError, match='is empty'):
+            read_bvals_bvecs(*self._write(tmp_path, '', ''))
+
+    def test_volume_count_mismatch(self, tmp_path):
+        from qsiplan.metadata import read_bvals_bvecs
+
+        with pytest.raises(ValueError, match='expected \\(3, 3\\)'):
+            read_bvals_bvecs(*self._write(tmp_path, '0 1000 1000\n', '0 1\n0 0\n0 0\n'))
+
+
 class TestEvaluateShells:
     """The shelled/non-shelled classifier (resurrected from the retired
     _side_is_shelled detector in workflows/dwi/diffprep.py)."""

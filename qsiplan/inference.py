@@ -409,6 +409,47 @@ def resolve_estimations(
     return estimations, targets, issues
 
 
+def drop_dwi_pepolar_estimations(
+    records: list[FileRecord],
+    estimations: dict[str, FieldmapEstimation],
+    targets: dict[str, set[str]],
+    issues: list[GroupingIssue],
+) -> set[str]:
+    """``--ignore pepolar-dwis``: never pair DWIs with each other for PEPOLAR.
+
+    Drops every PEPOLAR estimation whose sources are all DWI series - inferred
+    (E3) or curated (E1) alike; the command line overrides the sidecar linkage
+    here, exactly as ``--ignore fieldmaps`` does for ``fmap/``. An estimation
+    that also draws on a ``fmap/`` EPI survives: there the DWI is corrected by a
+    real fieldmap, not paired with another DWI. The dropped series fall through
+    to the fieldmap-less ladder in :func:`resolve_fieldmapless`.
+
+    Runs before :func:`resolve_application`, so the freed series re-resolve
+    naturally; the returned ids let it tell a curated ``B0FieldSource`` that
+    named a dropped estimation from a genuine dangling reference.
+    """
+    dwi_paths = {record.path for record in records if record.is_dwi}
+    dropped: set[str] = set()
+    for b0field_id, estimation in list(estimations.items()):
+        if estimation.method is not CorrectionMethod.PEPOLAR:
+            continue
+        if set(estimation.sources) <= dwi_paths:
+            estimations.pop(b0field_id)
+            targets.pop(b0field_id, None)
+            dropped.add(b0field_id)
+            if estimation.provenance is Provenance.CURATED:
+                issues.append(
+                    warning(
+                        'pepolar-dwis-ignored',
+                        f'--ignore pepolar-dwis dropped the curated reverse '
+                        f'phase-encoding pairing {b0field_id!r}; its DWI series '
+                        'are corrected another way or left uncorrected.',
+                        estimation.sources,
+                    )
+                )
+    return dropped
+
+
 def _by_session(records: list[FileRecord]) -> dict:
     sessions = defaultdict(list)
     for record in records:
@@ -469,8 +510,14 @@ def resolve_application(
     records: list[FileRecord],
     estimations: dict[str, FieldmapEstimation],
     targets: dict[str, set[str]],
+    ignored_sources: frozenset[str] = frozenset(),
 ):
-    """Decide which estimation corrects each DWI file (its B0FieldSource)."""
+    """Decide which estimation corrects each DWI file (its B0FieldSource).
+
+    ``ignored_sources`` are estimation ids that were intentionally dropped
+    (e.g. by ``--ignore pepolar-dwis``); a ``B0FieldSource`` naming one is
+    treated as intentionally unset, not as an unresolvable-reference error.
+    """
     issues: list[GroupingIssue] = []
     application: dict[str, str | None] = {}
     provenance: dict[str, Provenance] = {}
@@ -480,6 +527,10 @@ def resolve_application(
         candidates = []  # (method_rank, provenance_rank, b0field_id)
 
         for source_id in record.b0field_sources:
+            if source_id in ignored_sources:
+                # Intentionally dropped (e.g. --ignore pepolar-dwis): the
+                # curated link is honored as "do not use", not an error.
+                continue
             if source_id not in estimations:
                 issues.append(
                     error(
@@ -1055,6 +1106,7 @@ def build_grouping(
     subject_id: str,
     separate_all_dwis: bool = False,
     ignore_fieldmaps: bool = False,
+    ignore_pepolar_dwis: bool = False,
     ignore_shims: bool = False,
     ignore_fov: bool = False,
     ignore_sdc: bool = False,
@@ -1078,6 +1130,7 @@ def build_grouping(
     policy = GroupingPolicy(
         separate_all_dwis=separate_all_dwis,
         ignore_fieldmaps=ignore_fieldmaps,
+        ignore_pepolar_dwis=ignore_pepolar_dwis,
         ignore_shims=ignore_shims,
         ignore_fov=ignore_fov,
         ignore_sdc=ignore_sdc,
@@ -1101,8 +1154,12 @@ def build_grouping(
         estimations, targets, estimation_issues = resolve_estimations(records, ignore_shims)
         issues.extend(estimation_issues)
 
+        ignored_sources: set[str] = set()
+        if ignore_pepolar_dwis:
+            ignored_sources = drop_dwi_pepolar_estimations(records, estimations, targets, issues)
+
         application, app_provenance, candidates, application_issues = resolve_application(
-            records, estimations, targets
+            records, estimations, targets, ignored_sources=frozenset(ignored_sources)
         )
         issues.extend(application_issues)
 
