@@ -332,6 +332,7 @@ class GroupingPolicy:
 
     separate_all_dwis: bool = False
     ignore_fieldmaps: bool = False
+    ignore_pepolar_dwis: bool = False
     ignore_shims: bool = False
     ignore_fov: bool = False
     ignore_sdc: bool = False
@@ -363,18 +364,31 @@ class GroupingPolicy:
         return '&'.join(sorted(self.key_parts()))
 
     def cli_phrase(self) -> str:
-        """The qsiplan CLI flags that select this policy (``''`` for the default)."""
+        """The qsiprep flags that select this policy (``''`` for the default).
+
+        The grouping-related ``--ignore`` values compose one space-delimited
+        flag (``--ignore fieldmaps shims``), exactly as qsiprep's
+        ``--ignore {fieldmaps,pepolar-dwis,t2w,phase,sdc,shims,fov}`` accepts
+        them - never one standalone ``--ignore-*`` flag per value.
+        """
         flags = []
         if self.separate_all_dwis:
             flags.append('--separate-all-dwis')
-        if self.ignore_fieldmaps:
-            flags.append('--ignore-fieldmaps')
-        if self.ignore_shims:
-            flags.append('--ignore-shims')
-        if self.ignore_fov:
-            flags.append('--ignore-fov')
-        if self.ignore_sdc:
-            flags.append('--ignore-sdc')
+        # In qsiprep's declared choice order, skipping the two values
+        # (t2w, phase) that are not grouping-policy fields.
+        ignored = [
+            value
+            for value, enabled in (
+                ('fieldmaps', self.ignore_fieldmaps),
+                ('pepolar-dwis', self.ignore_pepolar_dwis),
+                ('sdc', self.ignore_sdc),
+                ('shims', self.ignore_shims),
+                ('fov', self.ignore_fov),
+            )
+            if enabled
+        ]
+        if ignored:
+            flags.append('--ignore ' + ' '.join(ignored))
         if self.force_t2wreg:
             flags.append('--force t2wreg')
         if self.use_synb0:

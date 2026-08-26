@@ -197,6 +197,11 @@ _CSS = """
   border:1.5px solid #cbd5e1;border-radius:7px;background:#fff;padding:2px 6px}
 .qsi-grouping .plan-controls input[type=checkbox]{accent-color:#0369a1;margin:0}
 .qsi-grouping .plan-controls label.noop{opacity:.5}
+.qsi-grouping .ignore-group{display:flex;align-items:center;gap:4px 10px;flex-wrap:wrap;
+  font-family:ui-monospace,Menlo,monospace;font-size:11.5px;color:#334155;
+  border:1px solid #e2e8f0;border-radius:7px;padding:2px 9px}
+.qsi-grouping .ignore-group .flag-name{color:#334155}
+.qsi-grouping .ignore-group label{gap:4px}
 .qsi-grouping .policy-cli{min-height:15px}
 .qsi-grouping .plan-panel{display:none}
 .qsi-grouping .plan-panel.on{display:block}
@@ -879,12 +884,18 @@ def _grouping_view(grouping: DWIGrouping) -> str:
 
 
 def _policy_controls(policy: GroupingPolicy) -> str:
-    """The grouping-policy control row, mirroring the CLI's policy flags.
+    """The grouping-policy control row, mirroring qsiprep's policy flags.
 
     Each control carries the ``name=value`` part it contributes to the
     canonical policy key (checkboxes via ``data-part``, selects via their
     option values), so the page script can spell any combination without
     knowing the flags. ``policy`` preselects the initial state.
+
+    The layout follows qsiprep's real CLI: the grouping-related ``--ignore``
+    values (``fieldmaps``/``shims``/``fov``) are checkboxes grouped under one
+    ``--ignore`` flag - it takes a space-delimited list, not one flag per
+    value - and the fieldmap-less methods are the mutually exclusive
+    ``--use-syn-sdc`` / ``--use-synb0`` / ``--force t2wreg``.
     """
 
     def box(part, label, checked):
@@ -896,16 +907,31 @@ def _policy_controls(policy: GroupingPolicy) -> str:
     def option(value, label, selected):
         return f'<option value="{value}"{" selected" if selected else ""}>{label}</option>'
 
-    fieldmapless = 't2wreg' if policy.force_t2wreg else 'synb0' if policy.use_synb0 else ''
+    fieldmapless = (
+        't2wreg'
+        if policy.force_t2wreg
+        else 'synb0'
+        if policy.use_synb0
+        else 'syn'
+        if policy.use_nipreps_syn_sdc
+        else ''
+    )
+    ignore_group = (
+        '<span class="ignore-group"><span class="flag-name">--ignore</span>'
+        + box('ignore-fieldmaps=1', 'fieldmaps', policy.ignore_fieldmaps)
+        + box('ignore-pepolar-dwis=1', 'pepolar-dwis', policy.ignore_pepolar_dwis)
+        + box('ignore-shims=1', 'shims', policy.ignore_shims)
+        + box('ignore-fov=1', 'fov', policy.ignore_fov)
+        + '</span>'
+    )
     merge = policy.distortion_group_merge
     return (
         '<div class="plan-controls policy-controls">'
         + box('separate-all-dwis=1', '--separate-all-dwis', policy.separate_all_dwis)
-        + box('ignore-fieldmaps=1', '--ignore-fieldmaps', policy.ignore_fieldmaps)
-        + box('ignore-shims=1', '--ignore-shims', policy.ignore_shims)
-        + box('ignore-fov=1', '--ignore-fov', policy.ignore_fov)
+        + ignore_group
         + '<label>fieldmap-less <select class="ctl-policy">'
         + option('', 'auto', not fieldmapless)
+        + option('use-syn-sdc=1', '--use-syn-sdc', fieldmapless == 'syn')
         + option('use-synb0=1', '--use-synb0', fieldmapless == 'synb0')
         + option('force-t2wreg=1', '--force t2wreg', fieldmapless == 't2wreg')
         + '</select></label>'

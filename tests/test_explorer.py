@@ -55,12 +55,35 @@ def test_combined_key_composes_both_axes():
 
 def test_reachable_policies_cover_the_grid():
     policies = reachable_policies()
-    assert len(policies) == 2 * 2 * 2 * 2 * 3 * 3
+    assert len(policies) == 2 * 2 * 2 * 2 * 2 * 4 * 3
     keys = {policy.policy_key() for policy in policies}
     assert len(keys) == len(policies)  # every combination spells uniquely
     assert '' in keys  # the all-defaults policy
-    # The fieldmap-less methods are one axis: never layered.
-    assert not any(policy.force_t2wreg and policy.use_synb0 for policy in policies)
+    # The fieldmap-less methods (SyN, SyNb0, T2Wreg) are one axis: never layered.
+    assert all(
+        sum([policy.use_nipreps_syn_sdc, policy.use_synb0, policy.force_t2wreg]) <= 1
+        for policy in policies
+    )
+
+
+def test_cli_phrase_composes_ignore_as_one_flag():
+    # qsiprep's --ignore takes a space-delimited list; the grouping values
+    # compose one flag in qsiprep's declared choice order, never one
+    # --ignore-<value> flag per value.
+    assert GroupingPolicy().cli_phrase() == ''
+    assert GroupingPolicy(ignore_fieldmaps=True).cli_phrase() == '--ignore fieldmaps'
+    policy = GroupingPolicy(
+        ignore_fieldmaps=True, ignore_sdc=True, ignore_shims=True, ignore_fov=True
+    )
+    assert policy.cli_phrase() == '--ignore fieldmaps sdc shims fov'
+    ordered = GroupingPolicy(ignore_fieldmaps=True, ignore_pepolar_dwis=True, ignore_sdc=True)
+    assert ordered.cli_phrase() == '--ignore fieldmaps pepolar-dwis sdc'
+    assert (
+        GroupingPolicy(separate_all_dwis=True, ignore_fov=True).cli_phrase()
+        == '--separate-all-dwis --ignore fov'
+    )
+    # The fieldmap-less flags stay separate and real (never folded into --ignore).
+    assert GroupingPolicy(use_nipreps_syn_sdc=True).cli_phrase() == '--use-syn-sdc'
 
 
 def test_noop_toggle_collapses_by_content(tmp_path):
@@ -164,7 +187,12 @@ def test_explorer_page_embeds_the_factored_index(tmp_path):
     # The controls carry the canonical key parts the page script assembles.
     assert 'data-part="separate-all-dwis=1"' in page
     assert 'data-part="ignore-fieldmaps=1"' in page
+    assert 'data-part="ignore-pepolar-dwis=1"' in page
     assert 'value="distortion-group-merge=average"' in page
+    # The --ignore values render as one flag's checkboxes, and the real
+    # fieldmap-less flag --use-syn-sdc is offered alongside --use-synb0.
+    assert 'class="ignore-group"' in page
+    assert 'value="use-syn-sdc=1"' in page
     assert 'class="grouping-view"' in page
     assert 'class="grouping-notes"' in page
 

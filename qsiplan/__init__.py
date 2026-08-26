@@ -127,6 +127,7 @@ def build_dwi_grouping(
     subject_data,
     separate_all_dwis=False,
     ignore_fieldmaps=False,
+    ignore_pepolar_dwis=False,
     ignore_shims=False,
     ignore_fov=False,
     ignore_sdc=False,
@@ -154,6 +155,13 @@ def build_dwi_grouping(
     ignore_fieldmaps : bool
         Do not index ``fmap/``. The reverse phase-encoding DWI heuristic
         still applies.
+    ignore_pepolar_dwis : bool
+        Never pair DWI series with each other to estimate a PEPOLAR fieldmap:
+        drop every PEPOLAR estimation whose sources are all DWIs, inferred or
+        curated. The series are still processed, just corrected by a fieldmap
+        they are linked to, a fieldmap-less method, or not at all. An estimation
+        that also uses a ``fmap/`` EPI (a DWI paired with a fieldmap, not with
+        another DWI) is kept.
     ignore_shims : bool
         Treat all ShimSetting values as compatible. Use when data were
         re-shimmed but distortion correction across shims is wanted anyway.
@@ -212,6 +220,7 @@ def build_dwi_grouping(
         subject_id=subject_id,
         separate_all_dwis=separate_all_dwis,
         ignore_fieldmaps=ignore_fieldmaps,
+        ignore_pepolar_dwis=ignore_pepolar_dwis,
         ignore_shims=ignore_shims,
         ignore_fov=ignore_fov,
         ignore_sdc=ignore_sdc,

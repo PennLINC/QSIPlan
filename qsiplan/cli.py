@@ -2,8 +2,8 @@
 
 Usage::
 
-    qsiprep-group /path/to/bids [--participant-label 01 02] \\
-        [--ignore-shims] [--separate-all-dwis] [--ignore-fieldmaps] \\
+    qsiplan /path/to/bids [--participant-label 01 02] \\
+        [--ignore fieldmaps shims fov] [--separate-all-dwis] \\
         [--hmc-method eddy|shoreline|tortoise] [--sdc-method auto|topup|...]
 
 Prints, per subject, the grouping decisions (with curated/inferred
@@ -22,11 +22,9 @@ from qsiplan import (
     index_subject,
     render_explorer_html,
     report_text,
-    selection_for_config,
 )
+from qsiplan.cli_spec import add_plan_arguments, policy_from_namespace, selection_from_namespace
 from qsiplan.explorer import build_for_policy
-from qsiplan.methods import SHORELINE_MODELS
-from qsiplan.models import GroupingPolicy
 from qsiplan.report import default_preview_selections
 
 
@@ -54,7 +52,7 @@ def _path_exists(path, parser):
         path = Path(path)
 
     if path is None or not path.exists():
-        raise parser.error(f"Path does not exist: <{path.resolve()}>.")
+        raise parser.error(f'Path does not exist: <{path.resolve()}>.')
     return path.resolve()
 
 
@@ -63,7 +61,7 @@ def _is_dir(path, parser):
     path = _path_exists(path, parser)
     if not path.is_dir():
         raise parser.error(
-            f"Path should point to a directory (or symlink of directory): <{path.absolute()}>."
+            f'Path should point to a directory (or symlink of directory): <{path.absolute()}>.'
         )
     return str(path)
 
@@ -91,69 +89,12 @@ def _build_parser():
         default=None,
         help='Restrict to one session label (without "ses-").',
     )
-    parser.add_argument(
-        '--hmc-method',
-        choices=['eddy', 'shoreline', 'tortoise'],
-        default=None,
-        help='Preview one head-motion-correction method instead of all defaults.',
-    )
-    parser.add_argument(
-        '--shoreline-model',
-        choices=list(SHORELINE_MODELS),
-        default=None,
-        help='SHORELine signal model (with --hmc-method shoreline).',
-    )
-    parser.add_argument(
-        '--sdc-method',
-        choices=['auto', 'topup', 'drbuddi', 'topup+drbuddi'],
-        default='auto',
-        help='PEPOLAR tool preference for the previewed method (default: auto).',
-    )
-    parser.add_argument(
-        '--ignore-shims',
-        action='store_true',
-        help='Treat all ShimSetting values as compatible.',
-    )
-    parser.add_argument(
-        '--ignore-fov',
-        action='store_true',
-        help=(
-            'Concatenate series with differently-oriented fields of view anyway '
-            '(distortion corrections will be misapplied). Grid-size mismatches '
-            'still error.'
-        ),
-    )
-    parser.add_argument(
-        '--separate-all-dwis',
-        action='store_true',
-        help='Every DWI series becomes its own output.',
-    )
-    parser.add_argument(
-        '--ignore-fieldmaps',
-        action='store_true',
-        help='Skip fmap/; only the reverse phase-encoding DWI heuristic applies.',
-    )
-    parser.add_argument(
-        '--force',
-        nargs='+',
-        default=[],
-        choices=['t2wreg'],
-        help='Force processing choices (space-delimited list). "t2wreg" '
-        'overrides all fieldmaps with T2w-registration SDC (TORTOISE T2Wreg).',
-    )
-    parser.add_argument(
-        '--distortion-group-merge',
-        choices=['concat', 'average', 'none'],
-        default='concat',
-        help="How the corrected results of an output's correction units are "
-        'combined: concatenated (default), averaged (opposite-PE duplicate '
-        'schemes), or kept as separate per-unit outputs.',
-    )
-    parser.add_argument(
-        '--use-synb0',
-        action='store_true',
-        help='Give fieldmap-less series a SyNb0 synthetic-b=0 estimation from the T1w.',
-    )
+    # Every plan-relevant flag - the method axis (--hmc-method,
+    # --shoreline-model, --sdc-method) and the grouping-policy axis (--ignore,
+    # --force, --separate-all-dwis, --use-syn-sdc, --use-synb0,
+    # --distortion-group-merge) - comes from the one spec qsiplan and qsiprep
+    # share, so a flag cannot be spelled two ways across the split.
+    add_plan_arguments(parser)
     parser.add_argument(
         '--html',
         metavar='PATH',
@@ -189,12 +130,17 @@ def _per_subject_path(path: str, subject: str, multi: bool) -> str:
 
 
 def _selections(args):
-    """The method selections to preview, from the parsed arguments."""
-    if args.shoreline_model and args.hmc_method != 'shoreline':
-        raise SystemExit('--shoreline-model requires --hmc-method shoreline')
-    if args.hmc_method:
-        hmc = args.shoreline_model or args.hmc_method
-        return [selection_for_config(hmc, args.sdc_method)]
+    """The method selections to preview, from the parsed arguments.
+
+    One selection when ``--hmc-method`` names it (the shared spec's bridge),
+    otherwise every default combination.
+    """
+    try:
+        selection = selection_from_namespace(args)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from None
+    if selection is not None:
+        return [selection]
     return list(default_preview_selections())
 
 
@@ -210,15 +156,7 @@ def main(argv=None):
         print(f'No subjects found in {args.bids_dir}', file=sys.stderr)
         return 1
 
-    policy = GroupingPolicy(
-        separate_all_dwis=args.separate_all_dwis,
-        ignore_fieldmaps=args.ignore_fieldmaps,
-        ignore_shims=args.ignore_shims,
-        ignore_fov=args.ignore_fov,
-        force_t2wreg='t2wreg' in args.force,
-        use_synb0=args.use_synb0,
-        distortion_group_merge=args.distortion_group_merge,
-    )
+    policy = policy_from_namespace(args)
 
     if args.serve:
         if args.html:

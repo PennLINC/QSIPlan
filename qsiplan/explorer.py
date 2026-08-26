@@ -5,7 +5,7 @@ A full flag combination factors into two pure stages: a
 :class:`~.methods.MethodSelection` turns a grouping into an execution plan.
 The explorer page makes both axes live. The method axis is small and always
 embeddable; the policy axis is a grid of CLI flags whose combinations mostly
-collapse for any given dataset (no fieldmaps means ``--ignore-fieldmaps``
+collapse for any given dataset (no fieldmaps means ``--ignore fieldmaps``
 changes nothing), so this module enumerates the grid once at generation time
 and dedupes it by *grouping content*: policies that produce identical
 groupings share one signature, one embedded rendering, and one set of
@@ -30,21 +30,31 @@ from .models import DWIGrouping, FileRecord, GroupingPolicy
 def reachable_policies(base: GroupingPolicy | None = None) -> list[GroupingPolicy]:
     """Every policy the explorer page's controls can select.
 
-    The grid mirrors the CLI's policy flags: the four boolean toggles, the
-    mutually exclusive fieldmap-less methods as one axis (automatic, SyNb0,
-    forced T2Wreg - layering them is reachable at the CLI but resolves to one
-    of these three), and the distortion-group merge strategy. Fields outside
-    the grid (``ignore_sdc``, ``use_nipreps_syn_sdc``) carry ``base``'s
-    values through every combination.
+    The grid mirrors the CLI's policy flags: the five boolean toggles
+    (``--separate-all-dwis`` and the ``--ignore`` values fieldmaps/pepolar-dwis/
+    shims/fov), the mutually exclusive fieldmap-less methods as one axis
+    (automatic, SyN, SyNb0, forced T2Wreg - layering them is reachable at the
+    CLI but resolves to one of these), and the distortion-group merge strategy.
+    The one field outside the grid (``ignore_sdc``) carries ``base``'s value
+    through every combination.
     """
     base = base if base is not None else GroupingPolicy()
     policies = []
-    for separate, no_fmaps, no_shims, no_fov, fieldmapless, merge in itertools.product(
+    for (
+        separate,
+        no_fmaps,
+        no_pepolar,
+        no_shims,
+        no_fov,
+        fieldmapless,
+        merge,
+    ) in itertools.product(
         (False, True),
         (False, True),
         (False, True),
         (False, True),
-        ('auto', 'synb0', 't2wreg'),
+        (False, True),
+        ('auto', 'syn', 'synb0', 't2wreg'),
         ('concat', 'average', 'none'),
     ):
         policies.append(
@@ -52,8 +62,10 @@ def reachable_policies(base: GroupingPolicy | None = None) -> list[GroupingPolic
                 base,
                 separate_all_dwis=separate,
                 ignore_fieldmaps=no_fmaps,
+                ignore_pepolar_dwis=no_pepolar,
                 ignore_shims=no_shims,
                 ignore_fov=no_fov,
+                use_nipreps_syn_sdc=fieldmapless == 'syn',
                 force_t2wreg=fieldmapless == 't2wreg',
                 use_synb0=fieldmapless == 'synb0',
                 distortion_group_merge=merge,
