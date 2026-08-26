@@ -54,7 +54,7 @@ def _path_exists(path, parser):
         path = Path(path)
 
     if path is None or not path.exists():
-        raise parser.error(f"Path does not exist: <{path.resolve()}>.")
+        raise parser.error(f'Path does not exist: <{path.resolve()}>.')
     return path.resolve()
 
 
@@ -63,7 +63,7 @@ def _is_dir(path, parser):
     path = _path_exists(path, parser)
     if not path.is_dir():
         raise parser.error(
-            f"Path should point to a directory (or symlink of directory): <{path.absolute()}>."
+            f'Path should point to a directory (or symlink of directory): <{path.absolute()}>.'
         )
     return str(path)
 

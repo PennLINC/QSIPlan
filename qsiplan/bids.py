@@ -35,7 +35,6 @@ Fetch some test data
 
 """
 
-import json
 from pathlib import Path
 
 
