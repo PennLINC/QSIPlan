@@ -4,9 +4,9 @@ import os.path as op
 
 import pytest
 from grouping_scenarios import get_test_data_path
-from niworkflows.utils.testing import generate_bids_skeleton
 
 from qsiplan.cli import main
+from qsiplan.utils import generate_bids_skeleton
 
 
 def _materialize(scenario, tmp_path):

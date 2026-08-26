@@ -55,7 +55,7 @@ def test_parse_combined_key_rejects_malformed_keys():
         parse_combined_key('hmc-method=eddy&sdc-method=topup&distortion-group-merge=maybe')
 
 
-@pytest.fixture()
+@pytest.fixture
 def served(tmp_path):
     layout, subject_data = build_layout('abcd_style', tmp_path)
     records, issues = index_subject(layout, subject_data)
