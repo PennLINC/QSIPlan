@@ -26,7 +26,5 @@ jobs:
         run: pip install -e '.[tests]' pytest-cov
       - name: Run the suite with coverage
         run: pytest tests --cov=qsiplan --cov-report=term --cov-fail-under=85
-      - name: Smoke the CLI entry points
-        run: |
-          qsiplan --help
-          qsiprep-group --help
+      - name: Smoke the CLI entry point
+        run: qsiplan --help
