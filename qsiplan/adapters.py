@@ -200,7 +200,12 @@ class PreprocUnit:
                 continue
             overrides[path] = {
                 'PhaseEncodingDirection': record.signature.pe_dir,
-                'TotalReadoutTime': record.signature.readout_time,
+                # ``signature.readout_time`` is tolerance-rounded so nearly
+                # identical acquisitions group together. Interfaces need the
+                # exact acquisition value when they build acqp rows.
+                'TotalReadoutTime': record.metadata.get(
+                    'TotalReadoutTime', record.signature.readout_time
+                ),
                 'SliceTiming': record.metadata.get('SliceTiming'),
             }
         return overrides

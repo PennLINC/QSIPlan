@@ -18,7 +18,9 @@ from qsiplan import (
     concatenation_scheme,
     to_preproc_units,
 )
+from qsiplan.adapters import PreprocUnit
 from qsiplan.interactive import _load_gradients
+from qsiplan.models import DistortionSignature, DWIGrouping, FileRecord
 from qsiplan.utils import generate_bids_skeleton
 
 
@@ -346,6 +348,44 @@ def test_sidecar_overrides_carry_pe_and_readout(tmp_path):
     for spec in overrides.values():
         assert spec['PhaseEncodingDirection'] in ('j', 'j-')
         assert 'TotalReadoutTime' in spec
+
+
+def test_sidecar_overrides_preserve_exact_readout_time():
+    """Grouping tolerance must not alter the value passed to acqp builders."""
+    path = '/data/sub-01/dwi/sub-01_dwi.nii.gz'
+    exact_readout = 0.05994
+    rounded_readout = 0.0599
+    record = FileRecord(
+        path=path,
+        datatype='dwi',
+        suffix='dwi',
+        session=None,
+        signature=DistortionSignature(pe_dir='j-', readout_time=rounded_readout),
+        metadata={
+            'PhaseEncodingDirection': 'j-',
+            'TotalReadoutTime': exact_readout,
+        },
+        shelled=True,
+    )
+    grouping = DWIGrouping(
+        subject_id='01',
+        files={path: record},
+        estimations={},
+        application={},
+        application_provenance={},
+        application_candidates={},
+        distortion_groups={},
+        concatenation_groups={},
+    )
+    unit = PreprocUnit(
+        grouping=grouping,
+        output_name='sub-01',
+        dwi_files=(path,),
+        estimation=None,
+    )
+
+    assert record.signature.readout_time != exact_readout
+    assert unit.sidecar_overrides()[path]['TotalReadoutTime'] == exact_readout
 
 
 def test_concatenation_scheme_multi_unit(tmp_path):

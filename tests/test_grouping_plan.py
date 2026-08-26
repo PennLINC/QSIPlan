@@ -134,6 +134,26 @@ def test_eddy_drbuddi_only_corrects_after_hmc(tmp_path):
     assert _role_tool(run) == [('hmc', 'eddy'), ('estimate+apply', 'drbuddi')]
 
 
+@pytest.mark.parametrize('scenario', ['multi_readout', 'cross_axis_b0field', 'partial_pair'])
+def test_eddy_drbuddi_only_rejects_pooled_blip_groups(tmp_path, scenario):
+    """A pooled eddy run must not silently drop DRBUDDI-only SDC."""
+    plan = _plan_for(tmp_path, scenario, 'eddy', 'drbuddi')
+    issues = [issue for issue in plan.issues if issue.code == 'drbuddi-only-infeasible']
+    assert issues
+    assert all(issue.severity == 'error' for issue in issues)
+    assert not any(run.stage_with('drbuddi') for run in plan.runs)
+
+
+def test_eddy_drbuddi_only_multigroup_report_does_not_claim_topup(tmp_path):
+    from qsiplan.report import describe_processing
+
+    grouping = load_scenario('multi_readout', tmp_path, strict=False)
+    selection = selection_for_config('eddy', 'drbuddi')
+    report = describe_processing(grouping, selection)
+    assert 'DRBUDDI-only selection is infeasible' in report
+    assert 'TOPUP+eddy corrects them together' not in report
+
+
 def test_tortoise_drbuddi_sequence(tmp_path):
     plan = _plan_for(tmp_path, 'hcp_style', 'tortoise', 'drbuddi')
     (run,) = plan.runs

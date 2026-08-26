@@ -881,16 +881,24 @@ def _describe_mixed(lines, grouping, selection, multipart_id, corrected, dgroups
                 )
                 step += 1
         elif len(all_pairs) > 1:
-            # DRBUDDI's single pass corrects one matched pair; a multi-group unit
-            # gets single-stage TOPUP+eddy (which pools every group correctly).
+            # DRBUDDI's single pass corrects one matched pair. TOPUP can pool
+            # the groups; without it this selection is infeasible.
             labels = '; '.join(
                 describe_blip_group(key) for key in sorted(all_pairs, key=blip_sort_key)
             )
-            lines.append(
-                f'  {step}. The estimation spans {len(all_pairs)} blip groups ({labels}); '
-                'TOPUP+eddy corrects them together, but the single-pass DRBUDDI refinement '
-                'covers one matched pair, so no DRBUDDI refinement is applied.'
-            )
+            if with_topup:
+                lines.append(
+                    f'  {step}. The estimation spans {len(all_pairs)} blip groups ({labels}); '
+                    'TOPUP+eddy corrects them together, but the single-pass DRBUDDI '
+                    'refinement covers one matched pair, so no DRBUDDI refinement is applied.'
+                )
+            else:
+                lines.append(
+                    f'  {step}. The estimation spans {len(all_pairs)} blip groups ({labels}); '
+                    'DRBUDDI corrects exactly one matched pair per run, so this pooled '
+                    'DRBUDDI-only selection is infeasible and no distortion-correction '
+                    'stage is planned.'
+                )
             step += 1
         else:
             axis_counts = Counter(key[0] for key in refine_pairs)
