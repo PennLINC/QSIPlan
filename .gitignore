@@ -1,0 +1,35 @@
+# Byte-compiled / caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.hypothesis/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# Version file, if hatch-vcs versioning is adopted
+qsiplan/_version.py
+
+# Coverage
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+# Environments
+.venv/
+env/
+.tox/
+
+# Editors / OS
+.idea/
+.vscode/
+.ipynb_checkpoints/
+*.swp
+*.DS_Store
+
+# Rendered preview pages from local qsiplan runs
+grouping*.html

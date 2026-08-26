@@ -1,0 +1,92 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "qsiplan"
+dynamic = ["version"]
+description = "Plan and explain QSIPrep's diffusion-MRI preprocessing from BIDS metadata"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+authors = [{ name = "The PennLINC developers" }]
+dependencies = [
+    "pybids",
+    "nibabel",
+    "numpy",
+]
+
+[project.optional-dependencies]
+tests = [
+    "pytest",
+    "niworkflows",
+]
+
+[project.scripts]
+qsiplan = "qsiplan.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/PennLINC/qsiprep"
+
+[tool.hatch.build.targets.wheel]
+packages = ["qsiplan"]
+
+[tool.hatch.version]
+source = "vcs"
+fallback-version = "0.1.0"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "qsiplan/_version.py"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["qsiplan"]
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.ruff]
+line-length = 99
+extend-exclude = ["qsiplan/_version.py"]
+
+[tool.ruff.lint]
+extend-select = [
+  "F",
+  "E",
+  "W",
+  "I",
+  "UP",
+  "YTT",
+  "S",
+  "BLE",
+  "B",
+  "A",
+  "C4",
+  "DTZ",
+  "T10",
+  "EXE",
+  "FA",
+  "ISC",
+  "ICN",
+  "PT",
+  "Q",
+]
+ignore = [
+  "ISC001",  # conflicts with the formatter
+  "S311",  # random is never used for cryptography here
+]
+
+[tool.ruff.lint.flake8-quotes]
+inline-quotes = "single"
+
+[tool.ruff.lint.extend-per-file-ignores]
+"tests/*.py" = ["S101"]
+
+[tool.ruff.format]
+quote-style = "single"
+
+[tool.codespell]
+skip = '.git,*.html,*.svg,*.lock'
