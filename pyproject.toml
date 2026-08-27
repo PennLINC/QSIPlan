@@ -11,7 +11,7 @@ license = { file = "LICENSE" }
 requires-python = ">=3.11"
 authors = [{ name = "The PennLINC developers" }]
 dependencies = [
-    "bids2table >= 2.3",
+    "bids2table >= 2.2.1, != 2.3.0",
     "nibabel",
     "numpy",
 ]
