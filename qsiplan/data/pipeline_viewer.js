@@ -60,7 +60,18 @@
 
   function render(root, data) {
     // Re-entrant: an interactive host calls this again with a new payload
-    // whenever the user changes the method controls.
+    // whenever the user changes the method controls. Outputs are drawn into
+    // per-output hosts (.output-plan, matched by output name within the same
+    // grouping fragment) when the page carries them; anything unmatched
+    // lands in `root`.
+    var scope = root.closest('.qsi-grouping') || document;
+    var hosts = {};
+    scope.querySelectorAll('.output-plan').forEach(function (host) {
+      hosts[host.dataset.outputName] = host;
+      host.querySelectorAll('.pp-output, .pp-tip').forEach(function (el) {
+        el.remove();
+      });
+    });
     root.querySelectorAll('.pp-output, .pp-tip').forEach(function (el) {
       el.remove();
     });
@@ -68,12 +79,21 @@
     var runsByKey = {};
     data.runs.forEach(function (run) { runsByKey[run.key] = run; });
 
-    var tip = document.createElement('div');
-    tip.className = 'pp-tip';
-    root.appendChild(tip);
+    var tips = {};
+    function tipFor(target) {
+      var key = target.dataset.outputName || '';
+      if (!tips[key]) {
+        var tip = document.createElement('div');
+        tip.className = 'pp-tip';
+        target.appendChild(tip);
+        tips[key] = tip;
+      }
+      return tips[key];
+    }
 
     data.outputs.forEach(function (output) {
-      root.appendChild(renderOutput(data, output, runsByKey, tip, root));
+      var target = hosts[output.name] || root;
+      target.appendChild(renderOutput(data, output, runsByKey, tipFor(target), target));
     });
   }
 

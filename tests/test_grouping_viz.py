@@ -7,10 +7,68 @@ they survive cosmetic changes.
 
 from __future__ import annotations
 
+from html.parser import HTMLParser
+
 import pytest
 from grouping_scenarios import SCENARIOS, load_scenario
 
 from qsiplan import render_html
+
+
+class _DivAudit(HTMLParser):
+    """Track <div> balance and .output nesting; <script> bodies are ignored
+    by the parser, so markup inside embedded JSON cannot skew the counts."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.depth = 0
+        self.underflow = 0
+        self.output_depth = 0
+        self.nested_outputs = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag != 'div':
+            return
+        self.depth += 1
+        classes = (dict(attrs).get('class') or '').split()
+        if 'output' in classes:
+            if self.output_depth:
+                self.nested_outputs += 1
+            self.output_depth += 1
+        elif self.output_depth:
+            self.output_depth += 1
+
+    def handle_endtag(self, tag):
+        if tag != 'div':
+            return
+        self.depth -= 1
+        if self.depth < 0:
+            self.underflow += 1
+        if self.output_depth:
+            self.output_depth -= 1
+
+
+@pytest.mark.parametrize('scenario', SCENARIOS)
+def test_render_html_divs_balance(tmp_path, scenario):
+    """An unclosed <div> nests every later box inside the previous one;
+    browsers auto-repair the DOM, so only the layout betrays it."""
+    grouping = load_scenario(scenario, tmp_path, strict=False)
+    audit = _DivAudit()
+    audit.feed(render_html(grouping))
+    assert audit.depth == 0, f'{audit.depth} unclosed <div>s'
+    assert audit.underflow == 0, f'{audit.underflow} stray </div>s'
+    assert audit.nested_outputs == 0, 'an output box is nested inside another'
+
+
+@pytest.mark.parametrize('scenario', SCENARIOS)
+def test_render_html_plan_host_per_output(tmp_path, scenario):
+    """Each output box carries a host for its own processing-plan diagram."""
+    grouping = load_scenario(scenario, tmp_path, strict=False)
+    page = render_html(grouping)
+    expected = len(grouping.concatenation_groups)
+    assert page.count('class="pipeline-viewer output-plan"') == expected
+    for concat in grouping.concatenation_groups.values():
+        assert f'data-output-name="{concat.output_name}"' in page
 
 
 @pytest.mark.parametrize('scenario', SCENARIOS)

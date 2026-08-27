@@ -728,6 +728,15 @@ def _output_boxes(grouping: DWIGrouping, letters: dict[str, str], past: bool = F
             '<div class="scheme-block"><p class="scheme-label">&#9673; Sampling scheme</p>'
             f'{_scheme_view(grouping, concat)}</div>'
         )
+        # Host for this output's processing-plan diagram: the pipeline viewer
+        # distributes each output's lane here (falling back to the Step 3
+        # host when a page carries no per-output hosts).
+        parts.append(
+            '<div class="pipeline-viewer output-plan" '
+            f'data-output-name="{_esc(concat.output_name)}">'
+            '<p class="scheme-label">&#9881; Processing plan</p></div>'
+        )
+        parts.append('</div>')
     parts.append('</section>')
     return parts
 

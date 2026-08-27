@@ -325,7 +325,10 @@ def _plan_issues(grouping: DWIGrouping, selection: MethodSelection) -> list[Grou
     everything else.
     """
     is_eddy = selection.hmc is HmcMethod.EDDY
-    refining = is_eddy and SdcTool.DRBUDDI in selection.pepolar_tools
+    with_topup = is_eddy and SdcTool.TOPUP in selection.pepolar_tools
+    with_drbuddi = is_eddy and SdcTool.DRBUDDI in selection.pepolar_tools
+    refining = with_topup and with_drbuddi
+    drbuddi_only = with_drbuddi and not with_topup
 
     issues: list[GroupingIssue] = []
     for multipart_id, concat in sorted(grouping.concatenation_groups.items()):
@@ -402,7 +405,7 @@ def _plan_issues(grouping: DWIGrouping, selection: MethodSelection) -> list[Grou
                     )
                 continue
 
-            if is_eddy and not refining:
+            if with_topup and not with_drbuddi:
                 if _pepolar_signature_count(grouping, estimation) < 2:
                     issues.append(
                         error(
@@ -411,6 +414,25 @@ def _plan_issues(grouping: DWIGrouping, selection: MethodSelection) -> list[Grou
                             f'signature among its sources. TOPUP needs at least two '
                             f'(e.g. opposite phase encoding directions) to estimate '
                             f"a fieldmap for '{concat.output_name}'.",
+                            estimation.sources,
+                            scope=multipart_id,
+                        )
+                    )
+            elif drbuddi_only:
+                pairs = blip_pair_polarities(grouping, estimation)
+                if len(pairs) != 1 or any(len(polarities) < 2 for polarities in pairs.values()):
+                    labels = '; '.join(
+                        describe_blip_group(key) for key in sorted(pairs, key=blip_sort_key)
+                    )
+                    issues.append(
+                        error(
+                            'drbuddi-only-infeasible',
+                            f"Estimation '{b0field_id}' spans {len(pairs)} blip groups "
+                            f'({labels}). DRBUDDI corrects exactly one matched '
+                            'blip-up/blip-down group per run, while eddy keeps this '
+                            f'output pooled. Use --sdc-method topup or topup+drbuddi '
+                            f"for '{concat.output_name}', or split the acquisition into "
+                            'separate outputs.',
                             estimation.sources,
                             scope=multipart_id,
                         )
