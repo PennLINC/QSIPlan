@@ -855,22 +855,33 @@ def _describe_mixed(lines, grouping, selection, multipart_id, corrected, dgroups
             key=blip_sort_key,
         )
         if not refine_pairs:
-            # No reverse-PE dMRI pair for DRBUDDI to refine (a lone reverse b=0 was
-            # already consumed by TOPUP): T2Wreg against a structural target, else
-            # single-stage.
-            phrase = _structural_phrase(grouping)
-            if phrase:
-                lines.append(
-                    f'  {step}. There is no reverse phase-encoded dMRI series for '
-                    f'DRBUDDI to refine with; instead, T2Wreg registers the '
-                    f'eddy-corrected b=0 to {phrase}, refining the TOPUP correction.'
-                )
+            if with_topup:
+                # A lone reverse b=0 was already consumed by TOPUP and eddy's
+                # output is already unwarped, so there is no second stage on
+                # the eddy path (it has no T2Wreg stage either).
+                phrase = _structural_phrase(grouping)
+                if phrase:
+                    lines.append(
+                        f'  {step}. There is no reverse phase-encoded dMRI series '
+                        'for DRBUDDI to refine with: correction is single-stage '
+                        f'(TOPUP + eddy); {phrase} is not used (the eddy path has '
+                        'no T2Wreg stage).'
+                    )
+                else:
+                    lines.append(
+                        f'  {step}. There is no reverse phase-encoded dMRI series for '
+                        'DRBUDDI to refine with, and no T2w or synthetic b=0 for a '
+                        'T2Wreg stage: correction is single-stage (TOPUP + eddy).'
+                    )
                 step += 1
-            elif with_topup:
+            elif any(len(pols) == 2 for pols in all_pairs.values()):
+                # DRBUDDI-only with the pair completed by an epi fieldmap:
+                # DRBUDDI runs in b=0-only (epi) mode after eddy.
                 lines.append(
-                    f'  {step}. There is no reverse phase-encoded dMRI series for '
-                    'DRBUDDI to refine with, and no T2w or synthetic b=0 for a '
-                    'T2Wreg stage: correction is single-stage (TOPUP + eddy).'
+                    f'  {step}. DRBUDDI estimates distortion from the mean '
+                    'motion-corrected b=0 and a reverse phase-encoded fieldmap '
+                    'b=0 (b=0-only registration) and applies the correction to '
+                    'every volume.'
                 )
                 step += 1
             else:

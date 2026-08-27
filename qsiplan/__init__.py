@@ -48,6 +48,8 @@ from .adapters import (
     to_preproc_units,
     unit_to_sidecar,
 )
+from .bids import parse_file_entities
+from .catalog import Bids2TableCatalog, DatasetCatalog
 from .inference import build_grouping
 from .interactive import explorer_view, render_explorer_html, render_html, render_report_segment
 from .metadata import index_subject
@@ -79,12 +81,14 @@ from .validation import BACKENDS, GroupingError, GroupingIssue, check_backend, r
 
 __all__ = [
     'BACKENDS',
+    'Bids2TableCatalog',
     'HMC_CAPABILITIES',
     'SDC_CAPABILITIES',
     'ConcatenationGroup',
     'DistortionGroup',
     'DistortionSignature',
     'DWIGrouping',
+    'DatasetCatalog',
     'CorrectionMethod',
     'FieldmapEstimation',
     'FileRecord',
@@ -206,8 +210,6 @@ def build_dwi_grouping(
     -------
     :class:`~.models.DWIGrouping`
     """
-    from bids.layout import parse_file_entities
-
     records, index_issues = index_subject(
         layout,
         subject_data,

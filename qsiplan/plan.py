@@ -248,13 +248,16 @@ def _pepolar_stages(
         stages.append(PlanStage(index=0, role=StageRole.HMC, tool=HmcMethod.EDDY.value))
 
     # The single-pass DRBUDDI stage consumes exactly one matched blip pair;
-    # eddy keeps multi-group units pooled, so those skip the refinement.
-    if SdcTool.DRBUDDI in selection.pepolar_tools and unit.is_single_blip_pair:
-        role = (
-            StageRole.REFINE
-            if SdcTool.TOPUP in selection.pepolar_tools
-            else (StageRole.ESTIMATE_AND_APPLY)
-        )
+    # eddy keeps multi-group units pooled, so those skip the refinement. The
+    # refinement additionally needs a reverse-PE DWI *series*: with a lone
+    # reverse b=0, eddy's output is already unwarped by the TOPUP field, so a
+    # DRBUDDI pass would apply the same correction a second time.
+    wants_drbuddi = SdcTool.DRBUDDI in selection.pepolar_tools and unit.is_single_blip_pair
+    refining = SdcTool.TOPUP in selection.pepolar_tools
+    if wants_drbuddi and refining and not dwi_blip_pairs(grouping, estimation):
+        wants_drbuddi = False
+    if wants_drbuddi:
+        role = StageRole.REFINE if refining else StageRole.ESTIMATE_AND_APPLY
         stages.append(
             PlanStage(
                 index=len(stages),
@@ -441,7 +444,8 @@ def _plan_issues(grouping: DWIGrouping, selection: MethodSelection) -> list[Grou
                 # DRBUDDI refinement needs reverse phase-encoded dMRI *series*;
                 # a lone reverse b=0 was already consumed by TOPUP.
                 fallback = (
-                    'The second stage is T2Wreg against a structural image instead.'
+                    f"'{concat.output_name}' gets single-stage (TOPUP+eddy) "
+                    'correction (the eddy path has no T2Wreg second stage).'
                     if structural_target(grouping) is not None
                     else 'No T2w or SyNb0 synthetic b=0 is available for a T2Wreg '
                     f"second stage either, so '{concat.output_name}' gets "

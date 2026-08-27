@@ -23,16 +23,16 @@ placeholders - and the downstream checks skip undetermined values.
 from __future__ import annotations
 
 import io
+import json
 import os.path as op
 import re
 from pathlib import Path
 
 import numpy as np
-from bids.layout import parse_file_entities
 
-from .bids import find_bval
+from .bids import BIDSInheritanceIndex, find_bval, parse_file_entities
 from .models import READOUT_TOLERANCE, DistortionSignature, FileRecord, GridInfo
-from .validation import GroupingIssue, warning
+from .validation import GroupingIssue, error, warning
 
 #: fmap/ suffixes that can participate in fieldmap estimation.
 FMAP_SUFFIXES = (
@@ -50,6 +50,7 @@ FMAP_SUFFIXES = (
 #: Diffusion-weighting at or below this is treated as b=0. Callers with a
 #: configured threshold pass it explicitly.
 B0_THRESHOLD = 100.0
+_UNSET = object()
 
 
 def unique_bvals(bvals, tol: float = 20.0):
@@ -154,14 +155,15 @@ def evaluate_shells(
 
 
 def _read_gradients(
-    nii_file: str, b0_threshold: float | None = None
+    nii_file: str, b0_threshold: float | None = None, bval_file=_UNSET
 ) -> tuple[bool | None, tuple[float, ...], float | None]:
     """(shelled, shell centres, max b-value) from a DWI's sibling .bval file.
 
     Missing or unreadable b-values (docs builds, test skeletons) leave
     everything undetermined rather than guessing.
     """
-    bval_file = find_bval(nii_file)
+    if bval_file is _UNSET:
+        bval_file = find_bval(nii_file)
     try:
         bvals = np.loadtxt(bval_file).reshape(-1)
     except (OSError, ValueError):
@@ -269,17 +271,61 @@ def resolve_intended_for(
     return tuple(resolved)
 
 
+def _load_metadata(path, inheritance, issues, cache, invalid_sidecars):
+    """Load inherited JSON strictly, retaining curation errors as issues."""
+    try:
+        sidecars = inheritance.find(path, '.json')
+    except ValueError as exc:
+        issues.append(error('ambiguous-json-inheritance', str(exc), (path,)))
+        return {}
+
+    metadata = {}
+    for sidecar in sidecars:
+        if sidecar in invalid_sidecars:
+            continue
+        if sidecar in cache:
+            metadata.update(cache[sidecar])
+            continue
+        try:
+            value = json.loads(sidecar.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            invalid_sidecars.add(sidecar)
+            issues.append(
+                error(
+                    'invalid-json-sidecar',
+                    f'{sidecar} could not be read as JSON: {exc}',
+                    (str(sidecar), path),
+                )
+            )
+            continue
+        if not isinstance(value, dict):
+            invalid_sidecars.add(sidecar)
+            issues.append(
+                error(
+                    'invalid-json-sidecar',
+                    f'{sidecar} must contain a JSON object, not {type(value).__name__}.',
+                    (str(sidecar), path),
+                )
+            )
+            continue
+        cache[sidecar] = value
+        metadata.update(value)
+    return metadata
+
+
 def _record_from_file(
     path: str,
-    layout,
+    inheritance,
     bids_root: str,
     subject_id: str,
     known_dwi_files: set[str],
     issues: list[GroupingIssue],
+    metadata_cache,
+    invalid_sidecars,
     b0_threshold: float | None = None,
 ) -> FileRecord:
     path = op.abspath(path)
-    metadata = layout.get_metadata(path)
+    metadata = _load_metadata(path, inheritance, issues, metadata_cache, invalid_sidecars)
     entities = parse_file_entities(path)
     datatype = entities.get('datatype') or ('dwi' if path in known_dwi_files else 'fmap')
 
@@ -295,8 +341,20 @@ def _record_from_file(
         )
 
     shelled, shells, max_bval, grid = (None, (), None, None)
+    bval_file = None
+    bvec_file = None
     if datatype == 'dwi':
-        shelled, shells, max_bval = _read_gradients(path, b0_threshold=b0_threshold)
+        try:
+            bvals = inheritance.find(path, '.bval')
+            bvecs = inheritance.find(path, '.bvec')
+        except ValueError as exc:
+            issues.append(error('ambiguous-gradient-inheritance', str(exc), (path,)))
+            bvals, bvecs = (), ()
+        bval_file = str(bvals[-1]) if bvals else None
+        bvec_file = str(bvecs[-1]) if bvecs else None
+        shelled, shells, max_bval = _read_gradients(
+            path, b0_threshold=b0_threshold, bval_file=bval_file
+        )
         grid = _read_grid(path)
 
     return FileRecord(
@@ -314,6 +372,8 @@ def _record_from_file(
         shells=shells,
         max_bval=max_bval,
         grid=grid,
+        bval_file=bval_file,
+        bvec_file=bvec_file,
     )
 
 
@@ -347,9 +407,10 @@ def index_subject(
 
     Parameters
     ----------
-    layout : :class:`bids.BIDSLayout`
-        Used for sidecar reading (``get_metadata`` applies BIDS inheritance)
-        and for discovering fmap/anat files when ``subject_data`` lacks them.
+    layout : dataset catalog or layout-like object
+        Supplies the dataset root and discovers fmap/anat files when
+        ``subject_data`` lacks them. QSIPlan resolves sidecars itself in one
+        strict BIDS-inheritance pass.
     subject_data : dict
         As produced by :func:`qsiprep.utils.bids.collect_data`: at minimum a
         ``'dwi'`` key listing this subject's DWI files; optional ``'fmap'``,
@@ -378,16 +439,22 @@ def index_subject(
         + _collect_datatype_files(layout, subject_data, subject_id, 't2w', 'anat', ('T2w',))
     )
 
+    all_files = sorted(known_dwi_files) + sorted(fmap_files) + anat_files
+    inheritance = BIDSInheritanceIndex(all_files, root=bids_root)
+    metadata_cache = {}
+    invalid_sidecars = set()
     records = [
         _record_from_file(
             path,
-            layout,
+            inheritance,
             bids_root,
             subject_id,
             known_dwi_files,
             issues,
+            metadata_cache,
+            invalid_sidecars,
             b0_threshold=b0_threshold,
         )
-        for path in sorted(known_dwi_files) + sorted(fmap_files) + anat_files
+        for path in all_files
     ]
     return records, issues

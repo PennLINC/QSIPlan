@@ -55,7 +55,7 @@ def test_parse_combined_key_rejects_malformed_keys():
         parse_combined_key('hmc-method=eddy&sdc-method=topup&distortion-group-merge=maybe')
 
 
-@pytest.fixture
+@pytest.fixture()
 def served(tmp_path):
     layout, subject_data = build_layout('abcd_style', tmp_path)
     records, issues = index_subject(layout, subject_data)
@@ -98,6 +98,7 @@ def test_served_page_is_live_and_minimal(served):
     # Full policy map for the no-op greying, but only the initial
     # combination's content embedded - the rest is fetched live.
     assert len(index['policies']) == len(reachable_policies())
+    assert sum(policy['sig'] is not None for policy in index['policies'].values()) == 1
     assert len(index['groupings']) == 1
     (by_selection,) = index['plans'].values()
     assert len(by_selection) == 1
@@ -153,3 +154,26 @@ def test_multi_subject_root_lists_subjects(tmp_path):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_multi_subject_root_escapes_and_quotes_labels():
+    app = ExplorerApp(None, ['safe', 'odd/"<label>'])
+    page = app.index_page()
+    assert 'sub-safe' in page
+    assert '/sub-odd%2F%22%3Clabel%3E' in page
+    assert 'sub-odd/&quot;&lt;label&gt;' in page
+    assert 'sub-odd/"<label>' not in page
+
+
+def test_server_caches_are_bounded_and_policies_compile_on_demand(tmp_path):
+    layout, _ = build_layout('abcd_style', tmp_path)
+    app = ExplorerApp(layout, ['01'], max_cached_subjects=1, max_cached_policies=2)
+
+    page = app.page('01')
+    index = _embedded_index(page)
+    assert sum(policy['sig'] is not None for policy in index['policies'].values()) == 1
+
+    app.view('01', 'hmc-method=eddy&sdc-method=topup&separate-all-dwis=1')
+    app.view('01', 'hmc-method=eddy&sdc-method=topup&ignore-fieldmaps=1')
+    state = app._states['01']
+    assert len(state.groupings) == 2

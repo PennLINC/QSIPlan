@@ -27,7 +27,6 @@ estimation touches).
 
 from __future__ import annotations
 
-import dataclasses
 import html
 
 from .bids import find_bval, find_bvec
@@ -150,16 +149,22 @@ _CSS = """
 .qsi-grouping .unused{font-weight:400;font-size:11px;color:#64748b}
 .qsi-grouping .output{background:#fff;border:1.5px solid #cbd5e1;border-radius:12px;
   margin:0 0 18px;padding:0 0 6px;overflow:hidden}
+.qsi-grouping .output-details{display:block}
+.qsi-grouping summary.out-head{cursor:pointer;list-style:none}
+.qsi-grouping summary.out-head::-webkit-details-marker{display:none}
+.qsi-grouping .out-toggle{font-size:14px;transition:transform .12s}
+.qsi-grouping .output-details:not([open]) .out-toggle{transform:rotate(-90deg)}
 .qsi-grouping .out-head{background:#0f172a;color:#fff;padding:9px 14px;display:flex;
-  gap:9px;align-items:center}
+  gap:9px;align-items:center;flex-wrap:wrap}
 .qsi-grouping .out-name{font-weight:650;font-size:13px;
-  font-family:ui-monospace,Menlo,monospace}
+  font-family:ui-monospace,Menlo,monospace;min-width:0;overflow-wrap:anywhere}
 .qsi-grouping .out-count{margin-left:auto;font-size:11.5px;color:#94a3b8}
 .qsi-grouping .out-why{padding:7px 14px 2px;color:#475569}
 .qsi-grouping .dgroup{margin:8px 12px;border:1px solid #e2e8f0;border-left:5px solid;
   border-radius:7px;padding:7px 10px;background:#fcfdfe}
 .qsi-grouping .dg-head{font-size:12.5px;display:flex;gap:7px;align-items:baseline;
   flex-wrap:wrap}
+.qsi-grouping .dg-head b{min-width:0;overflow-wrap:anywhere}
 .qsi-grouping .dg-sig{color:#64748b;font-size:11.5px}
 .qsi-grouping .dg-corr{margin-left:auto;font-size:11.5px}
 .qsi-grouping .prov-word{font-size:10.5px}
@@ -167,8 +172,8 @@ _CSS = """
 .qsi-grouping .nocorr{color:#b91c1c;font-weight:600}
 .qsi-grouping .pol{font-size:11px}
 .qsi-grouping .scan{display:flex;align-items:center;gap:7px;font-size:11.5px;
-  padding:2.5px 0 0 20px}
-.qsi-grouping .scan code{background:none;color:#334155}
+  padding:2.5px 0 0 20px;flex-wrap:wrap}
+.qsi-grouping .scan code{background:none;color:#334155;min-width:0;overflow-wrap:anywhere}
 .qsi-grouping .shells{color:#0e7490;font-size:10.5px;background:#ecfeff;
   border-radius:4px;padding:0 5px}
 .qsi-grouping .borrow{font-size:11.5px;color:#475569;margin:4px 14px;background:#f8fafc;
@@ -208,6 +213,8 @@ _CSS = """
 .qsi-grouping .plan-panel.on{display:block}
 .qsi-grouping .plan-cli{font-size:11.5px;color:#64748b;
   font-family:ui-monospace,Menlo,monospace;margin:0 0 10px}
+.qsi-grouping .plan-status{min-height:17px;font-size:11.5px;color:#64748b;margin:0 0 8px}
+.qsi-grouping .plan-status.error{color:#b91c1c;font-weight:600}
 .qsi-grouping .plan-prose{margin:2px 0 14px}
 .qsi-grouping .plan-prose summary{font-size:11.5px;color:#0369a1;cursor:pointer}
 .qsi-grouping .plan-out{font-size:11.5px;font-weight:650;color:#334155;
@@ -315,9 +322,10 @@ document.querySelectorAll('.qsi-grouping').forEach(root => {
     const host = section.querySelector('.plan-host');
     const cli = section.querySelector('.plan-cli');
     const prose = section.querySelector('.prose-host');
+    const status = section.querySelector('.plan-status');
 
     const policyKey = (overrideCtl, overrideValue) => {
-      const parts = [];
+      const parts = [...(index.fixedPolicyParts || [])];
       policyCtls.forEach(ctl => {
         let value;
         if (ctl === overrideCtl) value = overrideValue;
@@ -349,11 +357,12 @@ document.querySelectorAll('.qsi-grouping').forEach(root => {
     // live endpoint (the served mode), misses are fetched from the real
     // compiler and cached back into the index. The fetch query IS the
     // combined canonical key - the same spelling either provider consumes.
-    const resolveView = (pkey, sig, skey) => {
-      const cachedGrouping = index.groupings[sig];
-      const cachedPayload = (index.plans[sig] || {})[skey];
+    const resolveView = (pkey, policy, skey) => {
+      const sig = policy.sig;
+      const cachedGrouping = sig && index.groupings[sig];
+      const cachedPayload = sig && (index.plans[sig] || {})[skey];
       if (cachedGrouping && cachedPayload) {
-        return Promise.resolve({grouping: cachedGrouping, payload: cachedPayload});
+        return Promise.resolve({policy, grouping: cachedGrouping, payload: cachedPayload});
       }
       if (!index.api) return Promise.resolve(null);
       const query = [pkey, skey].filter(Boolean).join('&');
@@ -363,9 +372,11 @@ document.querySelectorAll('.qsi-grouping').forEach(root => {
           return response.json();
         })
         .then(data => {
-          index.groupings[sig] = data.grouping;
-          (index.plans[sig] = index.plans[sig] || {})[skey] = data.payload;
-          return {grouping: data.grouping, payload: data.payload};
+          const actual = data.policy;
+          index.policies[pkey] = actual;
+          index.groupings[actual.sig] = data.grouping;
+          (index.plans[actual.sig] = index.plans[actual.sig] || {})[skey] = data.payload;
+          return {policy: actual, grouping: data.grouping, payload: data.payload};
         });
     };
 
@@ -375,14 +386,21 @@ document.querySelectorAll('.qsi-grouping').forEach(root => {
       methods.sync();
       const pkey = policyKey();
       const policy = index.policies[pkey];
-      if (!policy) return;
-      policyCli.textContent = policy.cli || '(defaults)';
-      markNoops(policy.sig);
+      if (!policy) {
+        status.textContent = 'This grouping combination is unavailable.';
+        status.classList.add('error');
+        return;
+      }
       const ticket = ++latest;
-      resolveView(pkey, policy.sig, methods.key()).then(resolved => {
+      status.textContent = index.api ? 'Updating…' : '';
+      status.classList.remove('error');
+      resolveView(pkey, policy, methods.key()).then(resolved => {
         if (!resolved || ticket !== latest) return;
-        if (policy.sig !== shownSig) {
-          shownSig = policy.sig;
+        const actual = resolved.policy;
+        markNoops(actual.sig);
+        policyCli.textContent = actual.cli || '(defaults)';
+        if (actual.sig !== shownSig) {
+          shownSig = actual.sig;
           view.innerHTML = resolved.grouping.view;
           notes.innerHTML = resolved.grouping.notes;
           bindHover(view);
@@ -390,8 +408,15 @@ document.querySelectorAll('.qsi-grouping').forEach(root => {
         }
         window.QSIPrepPipeline.render(host, resolved.payload);
         cli.textContent = resolved.payload.selection.label + '  ('
-          + resolved.payload.selection.cli + (policy.cli ? ' ' + policy.cli : '') + ')';
+          + resolved.payload.selection.cli + (actual.cli ? ' ' + actual.cli : '') + ')';
         prose.innerHTML = resolved.payload.prose || '';
+        status.textContent = '';
+      }).catch(error => {
+        if (ticket !== latest) return;
+        status.textContent = 'Could not update the analysis plan. '
+          + 'The previous result is still shown.';
+        status.classList.add('error');
+        console.error(error);
       });
     };
     [...policyCtls, ...methods.controls].forEach(
@@ -602,15 +627,23 @@ def _scan_row(grouping: DWIGrouping, path: str, letters: dict[str, str]) -> str:
     return f'<div class="scan"><code>{_esc(_basename(path))}</code>{shell_span}{chips}</div>'
 
 
-def _load_gradients(path: str):
+def _load_gradients(path: str, record=None):
     """``(bvals, bvecs)`` from a DWI's sidecars, or ``None`` if unreadable.
 
     ``bvals`` is a list of floats and ``bvecs`` a list of ``(x, y, z)``
     lists. Returning ``None`` on a missing or malformed sidecar lets the
     report degrade to a short notice instead of failing.
     """
-    bval_file = find_bval(path)
-    bvec_file = find_bvec(path)
+    bval_file = (
+        record.bval_file
+        if record is not None and hasattr(record, 'bval_file')
+        else find_bval(path)
+    )
+    bvec_file = (
+        record.bvec_file
+        if record is not None and hasattr(record, 'bvec_file')
+        else find_bvec(path)
+    )
     try:
         bvals, bvecs = read_bvals_bvecs(bval_file, bvec_file)
     except ValueError:
@@ -627,11 +660,11 @@ def _scheme_data(grouping: DWIGrouping, concat) -> dict | None:
     """
     coords, meta, files, pes = [], [], [], []
     for path in concat.dwi_files:
-        loaded = _load_gradients(path)
+        record = grouping.files.get(path)
+        loaded = _load_gradients(path, record)
         if loaded is None:
             continue
         bvals, bvecs = loaded
-        record = grouping.files.get(path)
         pe = (record.signature.pe_dir if record else None) or 'unknown'
         if pe not in pes:
             pes.append(pe)
@@ -656,9 +689,15 @@ def _scheme_view(grouping: DWIGrouping, concat) -> str:
     return scheme_div(data)
 
 
+def _output_details_attr(n_outputs: int) -> str:
+    """Keep ordinary pages expanded and make large virtual-output grids compact."""
+    return '' if n_outputs > 8 else ' open'
+
+
 def _output_boxes(grouping: DWIGrouping, letters: dict[str, str], past: bool = False) -> list[str]:
     combined = 'were combined, and how each was' if past else 'are combined, and how each is'
     parts = [f'<section><h2>Step 2 &mdash; Outputs: which scans {combined} corrected</h2>']
+    details_attr = _output_details_attr(len(grouping.concatenation_groups))
     for concat_key, concat in sorted(grouping.concatenation_groups.items()):
         cfill, cstroke = _PROVENANCE_COLORS[_prov_value(concat.provenance)]
         n_scans = len(concat.dwi_files)
@@ -667,10 +706,12 @@ def _output_boxes(grouping: DWIGrouping, letters: dict[str, str], past: bool = F
             why += ' The <code>acq-</code> prefix also names the output file.'
         parts.append(
             '<div class="output">'
-            f'<div class="out-head"><span class="out-icon">&#128190;</span>'
+            f'<details class="output-details"{details_attr}>'
+            f'<summary class="out-head"><span class="out-icon">&#128190;</span>'
             f'<span class="out-name">{_esc(concat.output_name)}</span>'
             f'<span class="out-count">one output file &middot; {n_scans} '
-            f'scan{"s" if n_scans != 1 else ""} combined</span></div>'
+            f'scan{"s" if n_scans != 1 else ""} combined</span>'
+            '<span class="out-toggle" aria-hidden="true">&#9662;</span></summary>'
             f'<p class="why out-why"><span class="chip small" style="background:{cfill};'
             f'border-color:{cstroke}">{_esc(concat.provenance.value)}</span> '
             f'{why}</p>'
@@ -723,20 +764,20 @@ def _output_boxes(grouping: DWIGrouping, letters: dict[str, str], past: bool = F
                 '<b>not</b> part of this output file.</p>'
             )
 
+        # Host for this output's processing-plan diagram: the pipeline viewer
+        # distributes each output's lane here (falling back to the shared
+        # analysis host when a page carries no per-output hosts).
+        parts.append(
+            '<div class="pipeline-viewer output-plan" '
+            f'data-output-name="{_esc(concat.output_name)}">'
+            '<p class="scheme-label">&#9881; Analysis plan for this output</p></div>'
+        )
         # The concatenated sampling scheme for this output.
         parts.append(
             '<div class="scheme-block"><p class="scheme-label">&#9673; Sampling scheme</p>'
             f'{_scheme_view(grouping, concat)}</div>'
         )
-        # Host for this output's processing-plan diagram: the pipeline viewer
-        # distributes each output's lane here (falling back to the Step 3
-        # host when a page carries no per-output hosts).
-        parts.append(
-            '<div class="pipeline-viewer output-plan" '
-            f'data-output-name="{_esc(concat.output_name)}">'
-            '<p class="scheme-label">&#9881; Processing plan</p></div>'
-        )
-        parts.append('</div>')
+        parts.append('</details></div>')
     parts.append('</section>')
     return parts
 
@@ -1005,19 +1046,14 @@ def render_explorer_html(
     already built the :class:`~.explorer.PolicyGrid` (the server) passes it
     as ``grid``; it must have been built with ``base=initial_policy``.
     """
-    from .explorer import build_policy_grid
+    from .explorer import build_live_policy_grid, build_policy_grid, canonical_explorer_policy
 
     selections = list(selections) if selections is not None else reachable_selections()
-    initial_policy = initial_policy if initial_policy is not None else GroupingPolicy()
-    if initial_policy.force_t2wreg and initial_policy.use_synb0:
-        # The grid keys the fieldmap-less methods as one axis; layering them
-        # resolves to T2Wreg (matching resolve_fieldmapless's precedence).
-        initial_policy = dataclasses.replace(initial_policy, use_synb0=False)
+    initial_policy = canonical_explorer_policy(initial_policy)
 
     if grid is None:
-        grid = build_policy_grid(
-            records, subject_id, base=initial_policy, index_issues=index_issues
-        )
+        builder = build_live_policy_grid if live_endpoint is not None else build_policy_grid
+        grid = builder(records, subject_id, base=initial_policy, index_issues=index_issues)
     initial_signature = grid.policy_index[initial_policy.policy_key()]
 
     groupings_embed = {}
@@ -1043,6 +1079,10 @@ def render_explorer_html(
         },
         'groupings': groupings_embed,
         'plans': plans,
+        # ignore_sdc is intentionally a fixed base option rather than another
+        # grid axis (doubling an already large static explorer). Preserve it
+        # when JavaScript assembles keys from the editable controls.
+        'fixedPolicyParts': ['ignore-sdc=1'] if initial_policy.ignore_sdc else [],
     }
     if live_endpoint is not None:
         page_index['api'] = live_endpoint
@@ -1054,15 +1094,16 @@ def render_explorer_html(
             '<section><h2>Grouping options &mdash; how the scans are grouped</h2>',
             _policy_controls(initial_policy),
             '<p class="plan-cli policy-cli"></p></section>',
-            f'<div class="grouping-view">{initial["view"]}</div>',
             '<section class="plan-explorer">',
-            '<h2>Step 3 &mdash; Processing: what will happen</h2>',
+            '<h2>Analysis options &mdash; how each output will be processed</h2>',
             _plan_controls(selections, initial=initial_selection),
             '<p class="plan-cli"></p>',
+            '<p class="plan-status" role="status" aria-live="polite"></p>',
             '<div class="pipeline-viewer plan-host"></div>',
             '<details class="plan-prose"><summary>Step-by-step description</summary>'
             '<div class="prose-host"></div></details>',
             '</section>',
+            f'<div class="grouping-view">{initial["view"]}</div>',
             f'<div class="grouping-notes">{initial["notes"]}</div>',
             '<script type="application/json" class="explorer-index">'
             f'{_embedded_json(page_index)}</script>',

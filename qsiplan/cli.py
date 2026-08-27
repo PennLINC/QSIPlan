@@ -23,6 +23,7 @@ from qsiplan import (
     render_explorer_html,
     report_text,
 )
+from qsiplan.catalog import Bids2TableCatalog
 from qsiplan.cli_spec import add_plan_arguments, policy_from_namespace, selection_from_namespace
 from qsiplan.explorer import build_for_policy
 from qsiplan.report import default_preview_selections
@@ -148,10 +149,8 @@ def main(argv=None):
     args = _build_parser().parse_args(argv)
     selections = _selections(args)
 
-    from bids import BIDSLayout
-
-    layout = BIDSLayout(args.bids_dir, validate=False)
-    subjects = args.participant_label or layout.get_subjects()
+    catalog = Bids2TableCatalog(args.bids_dir)
+    subjects = args.participant_label or catalog.subjects()
     if not subjects:
         print(f'No subjects found in {args.bids_dir}', file=sys.stderr)
         return 1
@@ -164,7 +163,7 @@ def main(argv=None):
         from qsiplan.serve import ExplorerApp, run_server
 
         app = ExplorerApp(
-            layout,
+            catalog,
             subjects,
             session_id=args.session_id,
             base_policy=policy,
@@ -173,23 +172,14 @@ def main(argv=None):
         return run_server(app, port=args.port)
 
     exit_code = 0
-    for subject in subjects:
-        query = {
-            'subject': subject,
-            'suffix': 'dwi',
-            'extension': ['.nii', '.nii.gz'],
-            'return_type': 'file',
-        }
-        if args.session_id:
-            query['session'] = args.session_id
-        subject_data = {'dwi': sorted(layout.get(**query))}
+    for subject, subject_data in catalog.iter_subject_data(subjects, args.session_id):
         if not subject_data['dwi']:
             print(f'sub-{subject}: no DWI files found, skipping.\n')
             continue
 
         # One fieldmaps-included index pass serves the terminal report and
         # (via record filtering) every policy the HTML page can select.
-        records, index_issues = index_subject(layout, subject_data)
+        records, index_issues = index_subject(catalog, subject_data)
         grouping = build_for_policy(records, subject, policy, index_issues)
         print(report_text(grouping))
         for selection in selections:

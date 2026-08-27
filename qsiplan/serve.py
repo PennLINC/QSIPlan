@@ -15,92 +15,123 @@ from __future__ import annotations
 
 import json
 import threading
+from collections import OrderedDict
+from dataclasses import dataclass, field
+from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
-from .explorer import build_for_policy, build_policy_grid, grouping_signature
+from .catalog import collect_subject_data
+from .explorer import (
+    build_for_policy,
+    canonical_explorer_policy,
+    grouping_signature,
+    live_policy_grid,
+)
 from .interactive import explorer_view, render_explorer_html
 from .metadata import index_subject
 from .methods import parse_combined_key
 from .models import GroupingPolicy
 
 
+@dataclass
+class _SubjectState:
+    records: list
+    issues: list
+    max_policies: int
+    groupings: OrderedDict = field(default_factory=OrderedDict)
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def grouping(self, label, policy):
+        key = policy.policy_key()
+        with self.lock:
+            cached = self.groupings.get(key)
+            if cached is not None:
+                self.groupings.move_to_end(key)
+                return cached
+            grouping = build_for_policy(self.records, label, policy, self.issues)
+            value = (grouping_signature(grouping), grouping)
+            self.groupings[key] = value
+            while len(self.groupings) > self.max_policies:
+                self.groupings.popitem(last=False)
+            return value
+
+
 class ExplorerApp:
     """The server's request-independent core, kept apart from the HTTP layer.
 
-    Indexes each subject lazily and only once, keeps the records and the
-    deduped policy grid in memory, and answers view requests with the real
-    compiler. One lock serializes all state access: every operation is
-    milliseconds, and neither BIDSLayout nor the lazy caches are guaranteed
-    thread-safe.
+    Indexes subjects and policies lazily, retains bounded LRU caches, and
+    answers view requests with the real compiler. Dataset I/O happens outside
+    the global cache lock, while each subject serializes its own policy builds.
     """
 
     def __init__(
         self,
-        layout,
+        source,
         subjects,
         *,
         session_id=None,
         base_policy: GroupingPolicy | None = None,
         initial_selection=None,
+        max_cached_subjects: int = 16,
+        max_cached_policies: int = 32,
     ):
-        self._layout = layout
+        self._source = source
         self.subjects = list(subjects)
         self._session_id = session_id
-        self._base_policy = base_policy if base_policy is not None else GroupingPolicy()
+        self._base_policy = canonical_explorer_policy(base_policy)
         self._initial_selection = initial_selection
+        self._max_cached_subjects = max(1, max_cached_subjects)
+        self._max_cached_policies = max(1, max_cached_policies)
         self._lock = threading.Lock()
-        self._states = {}  # label -> (records, index_issues, PolicyGrid)
+        self._states = OrderedDict()
 
     def _state(self, label):
-        """The (records, issues, grid) triple for one subject, indexed once."""
-        if label not in self._states:
-            if label not in self.subjects:
-                raise KeyError(label)
-            query = {
-                'subject': label,
-                'suffix': 'dwi',
-                'extension': ['.nii', '.nii.gz'],
-                'return_type': 'file',
-            }
-            if self._session_id:
-                query['session'] = self._session_id
-            subject_data = {'dwi': sorted(self._layout.get(**query))}
-            if not subject_data['dwi']:
-                raise KeyError(label)
-            records, issues = index_subject(self._layout, subject_data)
-            grid = build_policy_grid(records, label, base=self._base_policy, index_issues=issues)
-            self._states[label] = (records, issues, grid)
-        return self._states[label]
+        """A bounded, lazily indexed state for one subject."""
+        if label not in self.subjects:
+            raise KeyError(label)
+        with self._lock:
+            state = self._states.get(label)
+            if state is not None:
+                self._states.move_to_end(label)
+                return state
+
+        # Dataset I/O and grouping happen outside the global cache lock, so a
+        # large first request does not block already-indexed subjects.
+        subject_data = collect_subject_data(self._source, label, self._session_id)
+        if not subject_data['dwi']:
+            raise KeyError(label)
+        records, issues = index_subject(self._source, subject_data)
+        state = _SubjectState(records, issues, self._max_cached_policies)
+        with self._lock:
+            state = self._states.setdefault(label, state)
+            self._states.move_to_end(label)
+            while len(self._states) > self._max_cached_subjects:
+                self._states.popitem(last=False)
+        return state
 
     def page(self, label: str) -> str:
         """The live explorer page for one subject."""
-        with self._lock:
-            records, issues, grid = self._state(label)
-            return render_explorer_html(
-                records,
-                label,
-                index_issues=issues,
-                initial_policy=self._base_policy,
-                initial_selection=self._initial_selection,
-                live_endpoint=f'/sub-{label}/view',
-                grid=grid,
-            )
+        state = self._state(label)
+        _signature, grouping = state.grouping(label, self._base_policy)
+        grid = live_policy_grid(grouping, self._base_policy)
+        return render_explorer_html(
+            state.records,
+            label,
+            index_issues=state.issues,
+            initial_policy=self._base_policy,
+            initial_selection=self._initial_selection,
+            live_endpoint=f'/sub-{label}/view',
+            grid=grid,
+        )
 
     def view(self, label: str, query: str) -> dict:
         """One live view: the query string is the canonical combined key."""
         policy, selection = parse_combined_key(query)
-        with self._lock:
-            records, issues, grid = self._state(label)
-            key = policy.policy_key()
-            signature = grid.policy_index.get(key)
-            if signature is not None:
-                grouping = grid.groupings[signature]
-            else:
-                # Beyond the embedded grid - the live compiler's whole point.
-                grouping = build_for_policy(records, label, policy, issues)
-                signature = grouping_signature(grouping)
-            resolved = explorer_view(grouping, selection)
+        state = self._state(label)
+        key = policy.policy_key()
+        signature, grouping = state.grouping(label, policy)
+        resolved = explorer_view(grouping, selection)
         return {
             'policyKey': key,
             'selectionKey': selection.combination_key(),
@@ -111,7 +142,8 @@ class ExplorerApp:
     def index_page(self) -> str:
         """The subject list at ``/`` (multi-subject datasets)."""
         items = ''.join(
-            f'<li><a href="/sub-{label}">sub-{label}</a></li>' for label in self.subjects
+            f'<li><a href="/sub-{quote(label, safe="")}">sub-{escape(label)}</a></li>'
+            for label in self.subjects
         )
         return (
             '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">\n'
@@ -130,7 +162,7 @@ class _Handler(BaseHTTPRequestHandler):
             if path in ('', '/'):
                 if len(self.app.subjects) == 1:
                     self.send_response(302)
-                    self.send_header('Location', f'/sub-{self.app.subjects[0]}')
+                    self.send_header('Location', f'/sub-{quote(self.app.subjects[0], safe="")}')
                     self.end_headers()
                     return
                 self._send(200, 'text/html', self.app.index_page())

@@ -27,6 +27,16 @@ from .inference import build_grouping
 from .models import DWIGrouping, FileRecord, GroupingPolicy
 
 
+def canonical_explorer_policy(policy: GroupingPolicy | None = None) -> GroupingPolicy:
+    """Canonicalize layered fieldmap-less flags to the explorer's single axis."""
+    policy = policy if policy is not None else GroupingPolicy()
+    if policy.force_t2wreg:
+        return dataclasses.replace(policy, use_synb0=False, use_nipreps_syn_sdc=False)
+    if policy.use_synb0 and policy.use_nipreps_syn_sdc:
+        return dataclasses.replace(policy, use_nipreps_syn_sdc=False)
+    return policy
+
+
 def reachable_policies(base: GroupingPolicy | None = None) -> list[GroupingPolicy]:
     """Every policy the explorer page's controls can select.
 
@@ -38,7 +48,7 @@ def reachable_policies(base: GroupingPolicy | None = None) -> list[GroupingPolic
     The one field outside the grid (``ignore_sdc``) carries ``base``'s value
     through every combination.
     """
-    base = base if base is not None else GroupingPolicy()
+    base = canonical_explorer_policy(base)
     policies = []
     for (
         separate,
@@ -134,9 +144,41 @@ class PolicyGrid:
     signature.
     """
 
-    policy_index: dict[str, str]
+    policy_index: dict[str, str | None]
     policy_cli: dict[str, str]
     groupings: dict[str, DWIGrouping]
+
+
+def build_live_policy_grid(
+    records: list[FileRecord],
+    subject_id: str,
+    *,
+    base: GroupingPolicy | None = None,
+    index_issues=(),
+) -> PolicyGrid:
+    """A live grid with only the initial grouping compiled.
+
+    Unknown signatures are filled by the server as policies are requested.
+    Static pages still use :func:`build_policy_grid` for full offline parity.
+    """
+    base = canonical_explorer_policy(base)
+    grouping = build_for_policy(records, subject_id, base, index_issues)
+    return live_policy_grid(grouping, base)
+
+
+def live_policy_grid(grouping: DWIGrouping, base: GroupingPolicy) -> PolicyGrid:
+    """Wrap one already-compiled grouping in the live policy index."""
+    base = canonical_explorer_policy(base)
+    signature = grouping_signature(grouping)
+    policies = reachable_policies(base)
+    policy_index = {policy.policy_key(): None for policy in policies}
+    policy_cli = {policy.policy_key(): policy.cli_phrase() for policy in policies}
+    policy_index[base.policy_key()] = signature
+    return PolicyGrid(
+        policy_index=policy_index,
+        policy_cli=policy_cli,
+        groupings={signature: grouping},
+    )
 
 
 def build_policy_grid(

@@ -9,6 +9,7 @@ recompiles the plan; and the explorer page embeds one rendering per
 import json
 import re
 
+import pytest
 from grouping_scenarios import build_layout
 
 from qsiplan import index_subject, render_explorer_html
@@ -210,3 +211,52 @@ def test_explorer_initial_state_matches_cli_flags(tmp_path):
     assert '<option value="tortoise" selected>' in page
     index = _embedded_index(page)
     assert 'separate-all-dwis=1' in index['policies']
+
+
+def test_explorer_preserves_fixed_ignore_sdc_policy(tmp_path):
+    """The non-editable ignore-sdc base flag remains part of every browser key."""
+    records, issues = _indexed('abcd_style', tmp_path)
+    page = render_explorer_html(
+        records,
+        '01',
+        index_issues=issues,
+        initial_policy=GroupingPolicy(ignore_sdc=True),
+    )
+    index = _embedded_index(page)
+    assert index['fixedPolicyParts'] == ['ignore-sdc=1']
+    assert 'ignore-sdc=1' in index['policies']
+    assert 'const parts = [...(index.fixedPolicyParts || [])]' in page
+
+
+@pytest.mark.parametrize(
+    ('policy', 'canonical_key'),
+    [
+        (
+            GroupingPolicy(force_t2wreg=True, use_nipreps_syn_sdc=True),
+            'force-t2wreg=1',
+        ),
+        (
+            GroupingPolicy(use_synb0=True, use_nipreps_syn_sdc=True),
+            'use-synb0=1',
+        ),
+    ],
+)
+def test_explorer_canonicalizes_layered_fieldmapless_flags(tmp_path, policy, canonical_key):
+    """Valid layered CLI flags resolve to the explorer's mutually exclusive axis."""
+    records, issues = _indexed('fieldmapless_t2w', tmp_path)
+    page = render_explorer_html(
+        records,
+        '01',
+        index_issues=issues,
+        initial_policy=policy,
+    )
+    index = _embedded_index(page)
+    assert canonical_key in index['policies']
+    assert policy.policy_key() not in index['policies']
+
+
+def test_explorer_places_analysis_controls_before_output_cards(tmp_path):
+    records, issues = _indexed('abcd_style', tmp_path)
+    page = render_explorer_html(records, '01', index_issues=issues)
+    assert page.index('class="plan-explorer"') < page.index('class="grouping-view"')
+    assert 'role="status" aria-live="polite"' in page

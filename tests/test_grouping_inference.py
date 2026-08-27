@@ -964,8 +964,8 @@ def test_mixed_refinement_needs_rpe_series(tmp_path):
     """A second DRBUDDI stage without reverse-PE dMRI series draws a warning.
 
     abcd_style (epi fmap only, no T2w): the warning says correction is
-    single-stage. abcd_t2w (same + T2w): the warning says the second stage is
-    T2Wreg instead, and the preview narrates it.
+    single-stage. abcd_t2w (same + T2w): still single-stage - the eddy path has
+    no T2Wreg second stage - and the preview says the T2w is not used.
     """
     from qsiplan import describe_processing
 
@@ -980,10 +980,9 @@ def test_mixed_refinement_needs_rpe_series(tmp_path):
     (issue,) = (
         i for i in check_backend(grouping, 'mixed') if i.code == 'drbuddi-refinement-not-useful'
     )
-    assert 'T2Wreg against a structural image' in issue.message
-    assert 'T2Wreg registers the eddy-corrected b=0 to the T2w image' in describe_processing(
-        grouping, 'mixed'
-    )
+    assert 'single-stage' in issue.message
+    assert 'no T2Wreg second stage' in issue.message
+    assert 'the eddy path has no T2Wreg stage' in describe_processing(grouping, 'mixed')
 
 
 def test_mixed_refinement_with_rpe_series(tmp_path):

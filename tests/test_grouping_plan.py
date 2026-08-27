@@ -134,6 +134,22 @@ def test_eddy_drbuddi_only_corrects_after_hmc(tmp_path):
     assert _role_tool(run) == [('hmc', 'eddy'), ('estimate+apply', 'drbuddi')]
 
 
+def test_eddy_mixed_epi_fmap_skips_drbuddi_refinement(tmp_path):
+    """A lone reverse b=0 completes the blip pair, but eddy's output is already
+    unwarped by the TOPUP field, so scheduling the DRBUDDI refinement would
+    correct the distortion a second time."""
+    plan = _plan_for(tmp_path / 'mixed', 'abcd_style', 'eddy', 'topup+drbuddi')
+    (run,) = plan.runs
+    assert _role_tool(run) == [('estimate', 'topup'), ('hmc-with-field', 'eddy')]
+    assert 'drbuddi-refinement-not-useful' in {issue.code for issue in plan.issues}
+
+    # DRBUDDI-only has no TOPUP stage to collide with: the fieldmap-completed
+    # pair is corrected by DRBUDDI in b=0-only (epi) mode.
+    plan = _plan_for(tmp_path / 'only', 'abcd_style', 'eddy', 'drbuddi')
+    (run,) = plan.runs
+    assert _role_tool(run) == [('hmc', 'eddy'), ('estimate+apply', 'drbuddi')]
+
+
 @pytest.mark.parametrize('scenario', ['multi_readout', 'cross_axis_b0field', 'partial_pair'])
 def test_eddy_drbuddi_only_rejects_pooled_blip_groups(tmp_path, scenario):
     """A pooled eddy run must not silently drop DRBUDDI-only SDC."""

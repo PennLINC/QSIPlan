@@ -210,6 +210,9 @@ class FileRecord:
     max_bval: float | None = None
     # Read from the NIfTI header (dwi only); None = unreadable/undetermined:
     grid: GridInfo | None = None
+    # Resolved once during indexing; the explorer must not rescan the dataset.
+    bval_file: str | None = None
+    bvec_file: str | None = None
 
     def __post_init__(self):
         # Freeze the raw sidecar so nothing downstream can mutate shared state.
