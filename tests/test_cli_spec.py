@@ -72,8 +72,8 @@ def test_default_namespace_is_the_default_policy():
 
 
 def test_policy_from_namespace_tolerates_missing_flags():
-    # A consumer (e.g. qsiprep's config, which has no --use-synb0) can omit a
-    # planned flag; the missing attribute falls back to its default.
+    # A consumer can omit a flag it has not wired up (or a config object that
+    # predates it); the missing attribute falls back to its default.
     namespace = argparse.Namespace(
         separate_all_dwis=True,
         ignore=['fieldmaps'],
@@ -158,5 +158,5 @@ def test_owned_choices_are_the_conformance_contract():
         'fov',
     }
     assert by_flag['--ignore'].extendable  # qsiprep adds t2w/phase
-    assert by_flag['--use-synb0'].planned  # spelled here, not yet in qsiprep
+    assert not by_flag['--use-synb0'].planned  # wired: qsiprep exposes the flag
     assert by_flag['--hmc-method'].kind is Kind.CHOICE

@@ -22,9 +22,10 @@ The list is deliberately small and data-only. It has to describe four shapes:
 ``--ignore`` and ``--force`` are *split-owned*: qsiplan owns the grouping
 values listed here, and a consumer (qsiprep) may add more choices that mean
 nothing to grouping (``t2w``, ``phase``); those options are marked
-``extendable``. ``--use-synb0`` is marked ``planned``: qsiplan models the
-method and spells the flag, but qsiprep has not exposed it yet, so a conformance
-check treats its absence there as expected rather than as drift.
+``extendable``. An option a consumer has not exposed yet may be marked
+``planned``, so a conformance check treats its absence there as expected
+rather than as drift (``--use-synb0`` carried the mark until qsiprep wired
+it up).
 """
 
 from __future__ import annotations
@@ -212,7 +213,6 @@ PLAN_OPTIONS: tuple[PlanOption, ...] = (
         'request a SyNb0 synthetic-b=0 fieldmap-less estimation from the T1w',
         policy_field='use_synb0',
         default=False,
-        planned=True,
     ),
     PlanOption(
         '--distortion-group-merge',
