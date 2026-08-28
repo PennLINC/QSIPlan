@@ -296,10 +296,34 @@ def _stages_for_unit(
             ),
         )
 
-    # The fieldmap-less family (T2Wreg, SyNb0) and uncorrected units. Only
-    # DIFFPREP registers to a structural target today; eddy and SHORELine
-    # leave these series uncorrected (the SyNb0-fed TOPUP workflow does not
-    # exist yet, and neither runs T2Wreg).
+    # SYNB0 is pepolar-by-synthesis: under eddy+TOPUP the synthetic
+    # undistorted b=0 joins TOPUP's inputs as a zero-readout distortion
+    # group, and eddy consumes the estimated field exactly as it does for a
+    # measured PEPOLAR pair.
+    if (
+        unit.method is CorrectionMethod.SYNB0
+        and selection.hmc is HmcMethod.EDDY
+        and SdcTool.TOPUP in selection.pepolar_tools
+    ):
+        return (
+            PlanStage(
+                index=0,
+                role=StageRole.ESTIMATE,
+                tool=SdcTool.TOPUP.value,
+                method=CorrectionMethod.SYNB0,
+                estimation=estimation.b0field_id,
+                fieldmap_sources=tuple(estimation.sources),
+                structural_target='synb0',
+            ),
+            PlanStage(
+                index=1, role=StageRole.HMC_WITH_FIELD, tool=HmcMethod.EDDY.value, consumes=0
+            ),
+        )
+
+    # The fieldmap-less family (T2Wreg, SyNb0 outside eddy+TOPUP) and
+    # uncorrected units. Only DIFFPREP registers to a structural target here;
+    # SHORELine and TOPUP-less eddy leave these series uncorrected (neither
+    # runs T2Wreg, and DRBUDDI does not consume the synthetic b=0 yet).
     if selection.hmc is HmcMethod.TORTOISE:
         target = structural_target(grouping)
         if target is not None:

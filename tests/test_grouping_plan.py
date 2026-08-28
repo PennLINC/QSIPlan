@@ -215,6 +215,31 @@ def test_synb0_prefers_synthetic_target_on_tortoise(tmp_path):
     assert targets in (set(), {'synb0'})
 
 
+def test_synb0_feeds_topup_on_eddy(tmp_path):
+    plan = _plan_for(tmp_path, 'fieldmapless_t1w_only', 'eddy', 'topup', use_synb0=True)
+    (run,) = plan.runs
+    assert _role_tool(run) == [('estimate', 'topup'), ('hmc-with-field', 'eddy')]
+    topup = run.stages[0]
+    assert topup.method is CorrectionMethod.SYNB0
+    assert topup.structural_target == 'synb0'
+    assert topup.estimation == run.estimation.b0field_id
+    assert run.stages[1].consumes == 0
+
+
+def test_synb0_topup_drbuddi_never_refines(tmp_path):
+    # There is no reverse phase-encoded dMRI data for a DRBUDDI second stage.
+    plan = _plan_for(tmp_path, 'fieldmapless_t1w_only', 'eddy', 'topup+drbuddi', use_synb0=True)
+    (run,) = plan.runs
+    assert _role_tool(run) == [('estimate', 'topup'), ('hmc-with-field', 'eddy')]
+
+
+@pytest.mark.parametrize(('hmc', 'sdc'), [('eddy', 'drbuddi'), ('shoreline', 'drbuddi')])
+def test_synb0_without_a_consumer_stays_uncorrected(tmp_path, hmc, sdc):
+    plan = _plan_for(tmp_path, 'fieldmapless_t1w_only', hmc, sdc, use_synb0=True)
+    (run,) = plan.runs
+    assert _role_tool(run) == [('hmc', hmc)]
+
+
 def test_syn_stage_targets_t1w(tmp_path):
     plan = _plan_for(tmp_path, 'fieldmapless_t1w_only', 'eddy', 'topup', use_nipreps_syn_sdc=True)
     (run,) = plan.runs
