@@ -331,6 +331,14 @@ class GroupingPolicy:
     :func:`~.inference.build_grouping` produces. The method axis (which
     software processes the grouped data) is :class:`~.methods.MethodSelection`;
     :func:`~.methods.combined_key` composes the two into one canonical key.
+
+    The anatomical (fieldmap-less) SDC axis is two orthogonal fields:
+    ``sdc_anat_reference`` selects which anatomical-derived source image may drive it
+    (``'none'``, ``'auto'``, ``'synb0'``, ``'t2w'``, or ``'invt1w'`` - the
+    inverted-contrast T1w) as a *fallback* for series no fieldmap reaches,
+    and ``force_sdc_anat_reference`` escalates the selected method to an *override*
+    that replaces the fieldmap application for every series (meaningless
+    with ``sdc_anat_reference='none'``).
     """
 
     separate_all_dwis: bool = False
@@ -340,9 +348,8 @@ class GroupingPolicy:
     ignore_shims: bool = False
     ignore_fov: bool = False
     ignore_sdc: bool = False
-    force_t2wreg: bool = False
-    use_synb0: bool = False
-    use_nipreps_syn_sdc: bool = False
+    sdc_anat_reference: str = 'none'
+    force_sdc_anat_reference: bool = False
     distortion_group_merge: str = 'concat'
 
     def key_parts(self) -> list[str]:
@@ -358,8 +365,6 @@ class GroupingPolicy:
             if value == field.default:
                 continue
             name = field.name.replace('_', '-')
-            if name == 'use-nipreps-syn-sdc':  # keyed by its qsiprep flag spelling
-                name = 'use-syn-sdc'
             parts.append(f'{name}=1' if value is True else f'{name}={value}')
         return parts
 
@@ -394,12 +399,12 @@ class GroupingPolicy:
         ]
         if ignored:
             flags.append('--ignore ' + ' '.join(ignored))
-        if self.force_t2wreg:
-            flags.append('--force t2wreg')
-        if self.use_synb0:
-            flags.append('--use-synb0')
-        if self.use_nipreps_syn_sdc:
-            flags.append('--use-syn-sdc')
+        if self.sdc_anat_reference != 'none':
+            flags.append(f'--sdc-anat-reference {self.sdc_anat_reference}')
+        force_members = (('sdc-anat-reference', self.force_sdc_anat_reference),)
+        forced = [value for value, enabled in force_members if enabled]
+        if forced:
+            flags.append('--force ' + ' '.join(forced))
         if self.distortion_group_merge != 'concat':
             flags.append(f'--distortion-group-merge {self.distortion_group_merge}')
         return ' '.join(flags)
@@ -429,8 +434,10 @@ class DWIGrouping:
     correction_units: dict[str, CorrectionUnit] = dataclasses.field(default_factory=dict)
     concatenation_groups: dict[str, ConcatenationGroup] = dataclasses.field(default_factory=dict)
     issues: list = dataclasses.field(default_factory=list)
-    #: SyNb0 was requested: a synthetic undistorted b=0 is available as the
-    #: structural target for registration-based stages, overriding any T2w.
+    #: Derived after resolution: True when any estimation is a SyNb0 one
+    #: (``any(est.method is CorrectionMethod.SYNB0 ...)``). A synthetic
+    #: undistorted b=0 is then available as the structural target for
+    #: registration-based stages, overriding any T2w.
     synb0_requested: bool = False
     #: The options this grouping was built under (see :class:`GroupingPolicy`).
     policy: GroupingPolicy = dataclasses.field(default_factory=GroupingPolicy)

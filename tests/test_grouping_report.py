@@ -11,10 +11,11 @@ Narration branch                                Golden stem
 inferred PEPOLAR on all three backends          hcp_style
 IntendedFor epi fmap + fmap-only b=0 extras     abcd_style
 GRE phasediff + curated-boundary outputs        two_gre_fmaps
-inferred T2Wreg (anat-sdc-unsupported on fsl)   fieldmapless_t2w
-fieldmap-less SyN (--use-syn-sdc)               fieldmapless_t1w_only_syn
-SyNb0 (--use-synb0)                             fieldmapless_t1w_only_synb0
-SyNb0 overriding a real T2w structural target   t2w_hcp_synb0
+uncorrected by default (anat SDC is opt-in)     fieldmapless_t2w
+auto ladder: T2w-only inferred T2Wreg           fieldmapless_t2w_auto
+inverted T1w (--sdc-anat-reference invt1w)      fieldmapless_t1w_only_syn
+SyNb0 (--sdc-anat-reference synb0)              fieldmapless_t1w_only_synb0
+SyNb0 overriding a real T2w structural target   stranded_synb0
 no PE information, no SDC at all                missing_pedir
 partial curation: curation disables inference   partial_curation
 borrowing + estimation-spans-outputs            multipart_splits_estimation
@@ -64,9 +65,10 @@ GOLDEN_CASES = [
     ('abcd_style', {}, 'abcd_style'),
     ('two_gre_fmaps', {}, 'two_gre_fmaps'),
     ('fieldmapless_t2w', {}, 'fieldmapless_t2w'),
-    ('fieldmapless_t1w_only', {'use_nipreps_syn_sdc': True}, 'fieldmapless_t1w_only_syn'),
-    ('fieldmapless_t1w_only', {'use_synb0': True}, 'fieldmapless_t1w_only_synb0'),
-    ('t2w_hcp', {'use_synb0': True}, 't2w_hcp_synb0'),
+    ('fieldmapless_t2w_only', {'sdc_anat_reference': 'auto'}, 'fieldmapless_t2w_auto'),
+    ('fieldmapless_t1w_only', {'sdc_anat_reference': 'invt1w'}, 'fieldmapless_t1w_only_syn'),
+    ('fieldmapless_t1w_only', {'sdc_anat_reference': 'synb0'}, 'fieldmapless_t1w_only_synb0'),
+    ('partial_curation_stranded', {'sdc_anat_reference': 'synb0'}, 'stranded_synb0'),
     ('missing_pedir', {}, 'missing_pedir'),
     ('partial_curation', {}, 'partial_curation'),
     ('multipart_splits_estimation', {}, 'multipart_splits_estimation'),
@@ -88,12 +90,13 @@ FLAG_VARIANTS = [
     ('hcp_style', {'separate_all_dwis': True}),
     ('reshim', {'ignore_shims': True}),
     ('abcd_style', {'ignore_fieldmaps': True}),
-    ('t2w_hcp', {'force_t2wreg': True}),
-    ('fieldmapless_t1w_only', {'use_synb0': True}),
-    ('fieldmapless_t1w_only', {'use_nipreps_syn_sdc': True}),
-    ('missing_pedir', {'use_synb0': True}),
+    ('t2w_hcp', {'sdc_anat_reference': 't2w', 'force_sdc_anat_reference': True}),
+    ('fieldmapless_t1w_only', {'sdc_anat_reference': 'synb0'}),
+    ('fieldmapless_t1w_only', {'sdc_anat_reference': 'invt1w'}),
+    ('missing_pedir', {'sdc_anat_reference': 'synb0'}),
     ('fov_oblique', {'ignore_fov': True}),
-    ('t2w_hcp', {'use_synb0': True}),
+    ('fieldmapless_t2w', {'sdc_anat_reference': 'auto'}),
+    ('t2w_hcp', {'sdc_anat_reference': 'synb0', 'force_sdc_anat_reference': True}),
 ]
 
 INVARIANT_CASES = [pytest.param(scenario, {}, id=scenario) for scenario in SCENARIOS] + [

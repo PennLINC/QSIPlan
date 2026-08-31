@@ -9,22 +9,20 @@ hand-built parser, assert conformance to it in a contract test - so a flag can
 never be spelled one way here and another way there, nor map to a field on one
 side and drift on the other.
 
-The list is deliberately small and data-only. It has to describe four shapes:
+The list is deliberately small and data-only. It has to describe three shapes:
 
 - a boolean flag (``--separate-all-dwis`` -> ``separate_all_dwis``);
 - a value list whose members each toggle a field (``--ignore fieldmaps shims``
   -> ``ignore_fieldmaps``/``ignore_shims``) - qsiprep's ``--ignore`` takes a
   space-delimited list, never one ``--ignore-<value>`` flag per value;
-- a single-value choice (``--distortion-group-merge {concat,average,none}``);
-- a presence flag (``--use-syn-sdc``) whose optional ``warn``/``error``
-  argument is a qsiprep runtime concern, so here it only signals "requested".
+- a single-value choice (``--sdc-anat-reference {none,auto,synb0,t2w,invt1w}``,
+  ``--distortion-group-merge {concat,average,none}``).
 
 ``--ignore`` and ``--force`` are *split-owned*: qsiplan owns the grouping
 values listed here, and a consumer (qsiprep) may add more choices that mean
 nothing to grouping (``phase``); those options are marked ``extendable``. An
 option a consumer has not exposed yet may be marked ``planned``, so a
-conformance check treats its absence there as expected rather than as drift
-(``--use-synb0`` carried the mark until qsiprep wired it up).
+conformance check treats its absence there as expected rather than as drift.
 """
 
 from __future__ import annotations
@@ -47,7 +45,6 @@ class Kind(enum.StrEnum):
     """The argparse shape of a plan option."""
 
     FLAG = 'flag'  # store_true boolean
-    PRESENCE = 'presence'  # nargs='?' - requested when present (truthy), value is a runtime detail
     CHOICE = 'choice'  # one value from ``choices``
     LIST = 'list'  # nargs='+' - each listed member toggles its field
 
@@ -72,12 +69,11 @@ class PlanOption:
     axis: Axis
     kind: Kind
     help: str
-    policy_field: str | None = None  # FLAG / PRESENCE / CHOICE target
+    policy_field: str | None = None  # FLAG / CHOICE target
     members: tuple[tuple[str, str], ...] = ()  # LIST: (choice value, policy field)
     selection_arg: str | None = None  # METHOD: 'hmc' | 'sdc' | 'shoreline_model'
-    choices: tuple[str, ...] = ()  # CHOICE / PRESENCE
+    choices: tuple[str, ...] = ()  # CHOICE
     default: object = None
-    const: object = None  # PRESENCE: value stored for the bare flag
     extendable: bool = False  # a consumer may add choices (split-owned lists)
     planned: bool = False  # spelled here, not yet exposed by every consumer
 
@@ -96,10 +92,6 @@ class PlanOption:
         kwargs: dict = {'dest': self.dest, 'help': self.help}
         if self.kind is Kind.FLAG:
             kwargs.update(action='store_true', default=bool(self.default))
-        elif self.kind is Kind.PRESENCE:
-            kwargs.update(
-                nargs='?', const=self.const, choices=list(self.choices), default=self.default
-            )
         elif self.kind is Kind.CHOICE:
             kwargs.update(choices=list(self.choices), default=self.default)
         elif self.kind is Kind.LIST:
@@ -115,10 +107,10 @@ class PlanOption:
 
         A consumer need not expose every flag - a ``planned`` one, or a config
         object that predates it - so a missing attribute falls back to the
-        option's default (``--use-synb0`` absent means ``use_synb0=False``).
+        option's default (``--sdc-anat-reference`` absent means ``sdc_anat_reference='none'``).
         """
         value = getattr(namespace, self.dest, self.default)
-        if self.kind in (Kind.FLAG, Kind.PRESENCE):
+        if self.kind is Kind.FLAG:
             return {self.policy_field: bool(value)}
         if self.kind is Kind.CHOICE:
             return {self.policy_field: value}
@@ -191,29 +183,29 @@ PLAN_OPTIONS: tuple[PlanOption, ...] = (
         '--force',
         Axis.POLICY,
         Kind.LIST,
-        "force processing choices (space-delimited): 't2wreg' overrides all "
-        'fieldmaps with T2w-registration SDC',
-        members=(('t2wreg', 'force_t2wreg'),),
+        "force processing choices (space-delimited): 'sdc-anat-reference' escalates "
+        '--sdc-anat-reference from a fallback to overriding existing fieldmaps for '
+        'every DWI series',
+        members=(('sdc-anat-reference', 'force_sdc_anat_reference'),),
         default=(),
         extendable=True,
     ),
     PlanOption(
-        '--use-syn-sdc',
+        '--sdc-anat-reference',
         Axis.POLICY,
-        Kind.PRESENCE,
-        'request fieldmap-less SyN distortion correction from the anatomical image',
-        policy_field='use_nipreps_syn_sdc',
-        choices=('warn', 'error'),
-        const='error',
-        default=False,
-    ),
-    PlanOption(
-        '--use-synb0',
-        Axis.POLICY,
-        Kind.FLAG,
-        'request a SyNb0 synthetic-b=0 fieldmap-less estimation from the T1w',
-        policy_field='use_synb0',
-        default=False,
+        Kind.CHOICE,
+        'which anatomical-derived image serves as the reference for '
+        'fieldmap-less SDC, used as a fallback for DWI series that no '
+        "fieldmap reaches: 'synb0' synthesizes an undistorted b=0 from the "
+        "T1w, 't2w' uses the real T2w (TORTOISE T2Wreg), 'invt1w' uses the "
+        "inverted-contrast T1w (nipreps-style SyN prior), 'auto' picks synb0 "
+        'when the subject has a T1w, else t2w when it has a T2w, else '
+        "nothing ('invt1w' is never picked automatically), and 'none' (the "
+        'default) disables anatomical SDC entirely; the engine consuming the '
+        'reference is governed by --sdc-method/--hmc-method',
+        policy_field='sdc_anat_reference',
+        choices=('none', 'auto', 'synb0', 't2w', 'invt1w'),
+        default='none',
     ),
     PlanOption(
         '--distortion-group-merge',

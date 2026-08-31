@@ -1,7 +1,8 @@
 # A single DWI series with no fieldmap of any kind, but the subject has a
-# T2w. Expected: an inferred T2Wreg (ANAT_CONTRAST) estimation is applied as
-# the fieldmap-less fallback; the tortoise preview states T2Wreg definitely,
-# and the fsl preview warns that it cannot execute it.
+# T1w and a T2w. Expected by default: no correction at all (anatomical SDC
+# is opt-in; there is no automatic T2w fallback). With sdc_anat_reference='auto': the
+# T1w wins the ladder and an INFERRED SyNb0 estimation corrects it. With
+# sdc_anat_reference='t2w': a FORCED T2Wreg estimation corrects it instead.
 '01':
   - anat:
       - suffix: T1w

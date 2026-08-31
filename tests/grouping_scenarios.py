@@ -38,6 +38,7 @@ SCENARIOS = [
     'curated_t2wreg',
     'fieldmapless_t1w_only',
     'fieldmapless_t2w',
+    'fieldmapless_t2w_only',
     'fov_grid',
     'fov_oblique',
     'fov_shift',

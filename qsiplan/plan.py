@@ -375,9 +375,9 @@ def _plan_issues(grouping: DWIGrouping, selection: MethodSelection) -> list[Grou
             issues.append(
                 warning(
                     'no-sdc',
-                    f"Output '{concat.output_name}' has no fieldmap and this subject "
-                    'has no T2w image (or the series lacks PhaseEncodingDirection): '
-                    'no susceptibility distortion correction will be performed.',
+                    f"Output '{concat.output_name}' has no fieldmap and no anatomical "
+                    'SDC method was enabled for it (see --sdc-anat-reference): no susceptibility '
+                    'distortion correction will be performed.',
                     concat.dwi_files,
                     scope=multipart_id,
                 )

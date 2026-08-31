@@ -331,7 +331,9 @@ document.querySelectorAll('.qsi-grouping').forEach(root => {
         if (ctl === overrideCtl) value = overrideValue;
         else if (ctl.type === 'checkbox') value = ctl.checked ? ctl.dataset.part : '';
         else value = ctl.value;
-        if (value) parts.push(value);
+        // A select option may compose several flags (--sdc-anat-reference X --force
+        // sdc-anat-reference): its value carries both key parts joined with '&'.
+        if (value) parts.push(...value.split('&'));
       });
       return parts.sort().join('&');
     };
@@ -947,8 +949,9 @@ def _policy_controls(policy: GroupingPolicy) -> str:
     The layout follows qsiprep's real CLI: the grouping-related ``--ignore``
     values (``fieldmaps``/``shims``/``fov``) are checkboxes grouped under one
     ``--ignore`` flag - it takes a space-delimited list, not one flag per
-    value - and the fieldmap-less methods are the mutually exclusive
-    ``--use-syn-sdc`` / ``--use-synb0`` / ``--force t2wreg``.
+    value - and the anatomical-SDC axis is one ``--sdc-anat-reference`` select whose
+    forced entries compose two flags (``--sdc-anat-reference t2w --force sdc-anat-reference``),
+    so their option values carry both canonical key parts joined with ``&``.
     """
 
     def box(part, label, checked):
@@ -960,15 +963,19 @@ def _policy_controls(policy: GroupingPolicy) -> str:
     def option(value, label, selected):
         return f'<option value="{value}"{" selected" if selected else ""}>{label}</option>'
 
-    fieldmapless = (
-        't2wreg'
-        if policy.force_t2wreg
-        else 'synb0'
-        if policy.use_synb0
-        else 'syn'
-        if policy.use_nipreps_syn_sdc
-        else ''
-    )
+    sdc_anat_reference = policy.sdc_anat_reference if policy.sdc_anat_reference != 'none' else ''
+    forced = bool(sdc_anat_reference) and policy.force_sdc_anat_reference
+
+    def anat_option(method):
+        value = f'sdc-anat-reference={method}'
+        label = f'--sdc-anat-reference {method}'
+        selected = sdc_anat_reference == method and not forced
+        markup = option(value, label, selected)
+        forced_label = f'{label} --force sdc-anat-reference'
+        forced_selected = sdc_anat_reference == method and forced
+        markup += option(f'{value}&force-sdc-anat-reference=1', forced_label, forced_selected)
+        return markup
+
     ignore_group = (
         '<span class="ignore-group"><span class="flag-name">--ignore</span>'
         + box('ignore-fieldmaps=1', 'fieldmaps', policy.ignore_fieldmaps)
@@ -983,11 +990,11 @@ def _policy_controls(policy: GroupingPolicy) -> str:
         '<div class="plan-controls policy-controls">'
         + box('separate-all-dwis=1', '--separate-all-dwis', policy.separate_all_dwis)
         + ignore_group
-        + '<label>fieldmap-less <select class="ctl-policy">'
-        + option('', 'auto', not fieldmapless)
-        + option('use-syn-sdc=1', '--use-syn-sdc', fieldmapless == 'syn')
-        + option('use-synb0=1', '--use-synb0', fieldmapless == 'synb0')
-        + option('force-t2wreg=1', '--force t2wreg', fieldmapless == 't2wreg')
+        + '<label>--sdc-anat-reference <select class="ctl-policy">'
+        + option('', 'none', not sdc_anat_reference)
+        + anat_option('synb0')
+        + anat_option('t2w')
+        + anat_option('invt1w')
         + '</select></label>'
         + '<label>--distortion-group-merge <select class="ctl-policy">'
         + option('', 'concat', merge == 'concat')

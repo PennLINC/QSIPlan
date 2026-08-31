@@ -136,9 +136,8 @@ def build_dwi_grouping(
     ignore_shims=False,
     ignore_fov=False,
     ignore_sdc=False,
-    force_t2wreg=False,
-    use_synb0=False,
-    use_nipreps_syn_sdc=False,
+    sdc_anat_reference='none',
+    force_sdc_anat_reference=False,
     distortion_group_merge='concat',
     b0_threshold=None,
     strict=True,
@@ -184,25 +183,27 @@ def build_dwi_grouping(
         reverse-PE heuristic, and no fieldmap-less fallback. Every series is
         left uncorrected but is still grouped and concatenated for HMC. Stronger
         than ``ignore_fieldmaps`` (which only skips ``fmap/``).
-    force_t2wreg : bool
-        Correct every DWI series by registering its b=0 to the subject's T2w
-        (TORTOISE T2Wreg), overriding any fieldmaps. Errors if no T2w exists.
-    use_synb0 : bool
-        Give series that have no fieldmap a SyNb0 synthetic-b=0 estimation
-        synthesized from the T1w. Never overrides a real fieldmap. Errors if
-        no T1w exists or a target series lacks PhaseEncodingDirection.
+    sdc_anat_reference : str
+        Which anatomical-derived source image may drive fieldmap-less SDC, as
+        a FALLBACK for series that no fieldmap reaches: ``'synb0'`` (a
+        synthetic b=0 from the T1w), ``'t2w'`` (the real T2w, TORTOISE
+        T2Wreg), ``'invt1w'`` (the inverted-contrast T1w - the standalone
+        niworkflows SyN-SDC prior), ``'auto'`` (resolved per subject: a T1w
+        selects synb0, else a T2w selects t2w, else nothing with a warning;
+        ``'invt1w'`` is unreachable via auto and must be requested
+        explicitly), or ``'none'`` (default: no anatomical SDC ever).
+        Explicit synb0/invt1w error if no T1w exists or a target series lacks
+        PhaseEncodingDirection; explicit t2w errors if no T2w exists.
+    force_sdc_anat_reference : bool
+        Escalate the ``sdc_anat_reference`` method from fallback to OVERRIDE: it
+        replaces the fieldmap application for every DWI series. An error when
+        ``sdc_anat_reference`` is ``'none'``.
     distortion_group_merge : str or None
         How the corrected results of a final output's correction units are
         combined: ``'concat'`` (default) concatenates them, ``'average'``
         averages matched volumes (opposite-PE duplicate schemes), and
         ``'none'`` keeps every correction unit as its own output (``None``
         is treated as ``'concat'``).
-    use_nipreps_syn_sdc : bool
-        Correct series that have no fieldmap with the standalone niworkflows
-        SyN-SDC: a constrained ANTs SyN registration of an inverted T1w (or a
-        synthetic b=0) to a fieldmap atlas. Never overrides a real fieldmap and
-        is never combined with SyNb0 (SyNb0 wins if both are set). Errors if no
-        T1w exists or a target series lacks PhaseEncodingDirection.
     b0_threshold : float
         Diffusion-weighting at or below this is treated as b=0 when
         classifying sampling schemes (default:
@@ -234,9 +235,8 @@ def build_dwi_grouping(
         ignore_shims=ignore_shims,
         ignore_fov=ignore_fov,
         ignore_sdc=ignore_sdc,
-        force_t2wreg=force_t2wreg,
-        use_synb0=use_synb0,
-        use_nipreps_syn_sdc=use_nipreps_syn_sdc,
+        sdc_anat_reference=sdc_anat_reference,
+        force_sdc_anat_reference=force_sdc_anat_reference,
         distortion_group_merge=distortion_group_merge,
         extra_issues=index_issues,
     )

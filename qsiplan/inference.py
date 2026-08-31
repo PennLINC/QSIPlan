@@ -616,44 +616,128 @@ def _anat_for_session(records, session, suffix):
     return []
 
 
+#: The anatomical SDC sources ``sdc_anat_reference`` can select, with the estimation
+#: parameters each uses: (CorrectionMethod, estimation id stem, anat suffix).
+#: ``sdc_anat_reference`` names the anatomical-derived SOURCE image (a synthetic b=0,
+#: the real T2w, or the inverted-contrast T1w); which engine consumes it is
+#: the method axis's business.
+_ANAT_SDC_METHODS = {
+    'synb0': (CorrectionMethod.SYNB0, 'synb0', 'T1w'),
+    't2w': (CorrectionMethod.T2WREG, 't2wreg', 'T2w'),
+    'invt1w': (CorrectionMethod.NIPREPS_SYN, 'syn', 'T1w'),
+}
+
+#: Per-method error for target series without a PhaseEncodingDirection.
+#: T2Wreg is a registration, not a correction along an encoding axis, so
+#: ``'t2w'`` deliberately has no entry and corrects such series anyway.
+_ANAT_SDC_PEDIR_ERRORS = {
+    'synb0': (
+        'synb0-missing-pedir',
+        'SyNb0 was requested, but these DWI series have no '
+        'PhaseEncodingDirection, which the synthetic-b=0 correction '
+        'requires.',
+    ),
+    'invt1w': (
+        'syn-missing-pedir',
+        'SyN-SDC was requested, but these DWI series have no '
+        'PhaseEncodingDirection, which the fieldmap-less SyN correction '
+        'requires.',
+    ),
+}
+
+#: Per-method error when the subject lacks the anatomical image it needs.
+_ANAT_SDC_MISSING_ANAT_ERRORS = {
+    'synb0': (
+        'synb0-requires-t1w',
+        'SyNb0 was requested, but this subject has no T1w image to '
+        'synthesize an undistorted b=0 from.',
+    ),
+    't2w': (
+        't2wreg-requires-t2w',
+        'T2w-registration SDC (T2Wreg) was requested, but this subject has no T2w image.',
+    ),
+    'invt1w': (
+        'syn-requires-t1w',
+        'SyN-SDC was requested, but this subject has no T1w image to register against a template.',
+    ),
+}
+
+
 def resolve_fieldmapless(
     records: list[FileRecord],
     estimations: dict[str, FieldmapEstimation],
     application: dict[str, str | None],
     provenance: dict[str, Provenance],
     candidates: dict[str, tuple[str, ...]],
-    force_t2wreg: bool = False,
-    use_synb0: bool = False,
-    use_nipreps_syn_sdc: bool = False,
+    sdc_anat_reference: str = 'none',
+    force_sdc_anat_reference: bool = False,
 ):
-    """Apply the fieldmap-less ladder to the application map (in place).
+    """Apply the selected anatomical SDC source to the application map (in place).
 
-    The fieldmap-less methods are mutually exclusive per run - each corrects a
-    series entirely on its own, never layered together:
+    ``sdc_anat_reference`` names at most ONE anatomical-derived source image for
+    fieldmap-less correction - each corrects a series entirely on its own,
+    never layered with another:
 
-    - ``force_t2wreg`` overrides every DWI's fieldmap with a T2w registration
-      (T2Wreg) estimation and overrides the other two if they were also asked
-      for.
-    - ``use_nipreps_syn_sdc`` is the standalone niworkflows SyN-SDC: a
-      constrained ANTs SyN registration of an inverted T1w (or a synthetic b=0)
-      to a fieldmap atlas. It corrects every still-uncorrected series and is
-      never combined with SyNb0 (SyNb0 wins if both are requested).
-    - ``use_synb0`` gives still-uncorrected series a SyNb0 synthetic-b=0
-      estimation.
-    - Finally, uncorrected series in a subject with a T2w fall back to an
-      inferred T2Wreg estimation (today's automatic TORTOISE behavior, made
-      explicit).
+    - ``'synb0'``: a SyNb0 synthetic-b=0 estimation from the T1w.
+    - ``'t2w'``: a T2w-registration (T2Wreg) estimation from the T2w.
+    - ``'invt1w'``: the inverted-contrast T1w (nipreps-style SyN prior) - the
+      standalone niworkflows SyN-SDC estimation.
+    - ``'auto'``: resolved once per subject from data availability - a T1w
+      selects ``'synb0'``, otherwise a T2w selects ``'t2w'``, otherwise
+      nothing at all (with a warning). ``'invt1w'`` is unreachable through
+      ``'auto'``, since ``'synb0'`` outranks it whenever a T1w exists; only
+      an explicit ``--sdc-anat-reference invt1w`` selects it.
+    - ``'none'`` (default): no anatomical SDC ever - series no fieldmap
+      reaches are left uncorrected.
+
+    The selected method is a FALLBACK: it corrects only series that no
+    fieldmap reaches. ``force_sdc_anat_reference`` escalates it to an OVERRIDE that
+    replaces the fieldmap application for ALL DWI series; forcing with
+    ``sdc_anat_reference='none'`` selects nothing to force and is an error.
 
     Anatomical estimations are created per session, with the anatomical
     image(s) as their only sources - the DWIs they correct are targets, since
     each output registers its own b=0. A DWI without a PhaseEncodingDirection
-    cannot be corrected along an axis: it is skipped by the fallback and is a
-    hard error when SyNb0 or SyN-SDC was explicitly requested.
+    cannot be corrected along an axis: SyNb0 and SyN-SDC skip such series
+    with a hard error (T2Wreg is a pure registration and corrects them).
     """
     issues: list[GroupingIssue] = []
     dwi_records = {record.path: record for record in records if record.is_dwi}
 
-    def _apply(paths, session, method, id_stem, suffix, prov):
+    if force_sdc_anat_reference and sdc_anat_reference == 'none':
+        issues.append(
+            error(
+                'force-sdc-anat-reference-needs-method',
+                '--force sdc-anat-reference requires an anatomical SDC method to force: '
+                'pass --sdc-anat-reference synb0, t2w, invt1w, or auto.',
+            )
+        )
+        return issues
+
+    method_name = sdc_anat_reference
+    prov = Provenance.FORCED
+    if sdc_anat_reference == 'auto':
+        if not force_sdc_anat_reference:
+            prov = Provenance.INFERRED
+        if any(record.is_anat and record.suffix == 'T1w' for record in records):
+            method_name = 'synb0'
+        elif any(record.is_anat and record.suffix == 'T2w' for record in records):
+            method_name = 't2w'
+        else:
+            issues.append(
+                warning(
+                    'sdc-anat-reference-auto-no-anatomicals',
+                    '--sdc-anat-reference auto found no T1w or T2w for this subject, so no '
+                    'anatomical susceptibility distortion correction is performed.',
+                )
+            )
+            return issues
+    if method_name == 'none':
+        return issues
+
+    method, id_stem, suffix = _ANAT_SDC_METHODS[method_name]
+
+    def _apply(paths, session):
         anat = _anat_for_session(records, session, suffix)
         if not anat:
             return False
@@ -673,121 +757,23 @@ def resolve_fieldmapless(
     for path, record in sorted(dwi_records.items()):
         by_session[record.session].append(path)
 
-    if force_t2wreg:
-        if use_synb0 or use_nipreps_syn_sdc:
-            issues.append(
-                warning(
-                    'fieldmapless-overridden',
-                    'Forcing T2Wreg overrides the other fieldmap-less methods; '
-                    'SyNb0 and SyN-SDC are not used.',
-                )
-            )
-        for session, paths in sorted(by_session.items(), key=lambda kv: str(kv[0])):
-            if not _apply(
-                paths, session, CorrectionMethod.T2WREG, 't2wreg', 'T2w', Provenance.FORCED
-            ):
-                issues.append(
-                    error(
-                        't2wreg-requires-t2w',
-                        'T2w-registration SDC (T2Wreg) was requested, but this subject '
-                        'has no T2w image.',
-                        tuple(paths),
-                    )
-                )
-        return issues
-
-    # SyN-SDC is a standalone fieldmap-less workflow; it is never layered with
-    # SyNb0. If both are requested, SyNb0 wins and SyN-SDC is dropped.
-    if use_synb0 and use_nipreps_syn_sdc:
-        issues.append(
-            warning(
-                'syn-sdc-standalone',
-                'SyN-SDC is a standalone fieldmap-less method and cannot be combined '
-                'with SyNb0; SyNb0 is used and SyN-SDC is not.',
-            )
-        )
-        use_nipreps_syn_sdc = False
-
-    if use_synb0:
-        for session, paths in sorted(by_session.items(), key=lambda kv: str(kv[0])):
-            uncorrected = [path for path in paths if application[path] is None]
-            if not uncorrected:
-                continue
-            missing_pedir = [
-                path for path in uncorrected if dwi_records[path].signature.pe_dir is None
-            ]
-            if missing_pedir:
-                issues.append(
-                    error(
-                        'synb0-missing-pedir',
-                        'SyNb0 was requested, but these DWI series have no '
-                        'PhaseEncodingDirection, which the synthetic-b=0 correction '
-                        'requires.',
-                        tuple(missing_pedir),
-                    )
-                )
-            correctable = [path for path in uncorrected if path not in missing_pedir]
-            if correctable and not _apply(
-                correctable, session, CorrectionMethod.SYNB0, 'synb0', 'T1w', Provenance.FORCED
-            ):
-                issues.append(
-                    error(
-                        'synb0-requires-t1w',
-                        'SyNb0 was requested, but this subject has no T1w image to '
-                        'synthesize an undistorted b=0 from.',
-                        tuple(correctable),
-                    )
-                )
-
-    if use_nipreps_syn_sdc:
-        for session, paths in sorted(by_session.items(), key=lambda kv: str(kv[0])):
-            uncorrected = [path for path in paths if application[path] is None]
-            if not uncorrected:
-                continue
-            missing_pedir = [
-                path for path in uncorrected if dwi_records[path].signature.pe_dir is None
-            ]
-            if missing_pedir:
-                issues.append(
-                    error(
-                        'syn-missing-pedir',
-                        'SyN-SDC was requested, but these DWI series have no '
-                        'PhaseEncodingDirection, which the fieldmap-less SyN correction '
-                        'requires.',
-                        tuple(missing_pedir),
-                    )
-                )
-            correctable = [path for path in uncorrected if path not in missing_pedir]
-            if correctable and not _apply(
-                correctable, session, CorrectionMethod.NIPREPS_SYN, 'syn', 'T1w', Provenance.FORCED
-            ):
-                issues.append(
-                    error(
-                        'syn-requires-t1w',
-                        'SyN-SDC was requested, but this subject has no T1w image to '
-                        'register against a template.',
-                        tuple(correctable),
-                    )
-                )
-
-    # Automatic fallback: a subject with a T2w gets T2Wreg for anything that
-    # still has no fieldmap (executable on the TORTOISE path only - the
-    # backend checks say so explicitly).
+    pedir_error = _ANAT_SDC_PEDIR_ERRORS.get(method_name)
     for session, paths in sorted(by_session.items(), key=lambda kv: str(kv[0])):
-        fallback = [
-            path
-            for path in paths
-            if application[path] is None and dwi_records[path].signature.pe_dir is not None
-        ]
-        if fallback:
-            _apply(
-                fallback,
-                session,
-                CorrectionMethod.T2WREG,
-                't2wreg',
-                'T2w',
-                Provenance.INFERRED,
-            )
+        if force_sdc_anat_reference:
+            targets = list(paths)
+        else:
+            targets = [p for p in paths if application[p] is None]
+        if not targets:
+            continue
+        if pedir_error is not None:
+            missing_pedir = [p for p in targets if dwi_records[p].signature.pe_dir is None]
+            if missing_pedir:
+                code, message = pedir_error
+                issues.append(error(code, message, tuple(missing_pedir)))
+                targets = [p for p in targets if p not in missing_pedir]
+        if targets and not _apply(targets, session):
+            code, message = _ANAT_SDC_MISSING_ANAT_ERRORS[method_name]
+            issues.append(error(code, message, tuple(targets)))
 
     return issues
 
@@ -1111,9 +1097,8 @@ def build_grouping(
     ignore_shims: bool = False,
     ignore_fov: bool = False,
     ignore_sdc: bool = False,
-    force_t2wreg: bool = False,
-    use_synb0: bool = False,
-    use_nipreps_syn_sdc: bool = False,
+    sdc_anat_reference: str | None = 'none',
+    force_sdc_anat_reference: bool = False,
     distortion_group_merge: str | None = 'concat',
     extra_issues: list[GroupingIssue] | None = None,
 ) -> DWIGrouping:
@@ -1129,6 +1114,12 @@ def build_grouping(
             f"distortion_group_merge must be 'concat', 'average', or 'none', "
             f'not {distortion_group_merge!r}.'
         )
+    sdc_anat_reference = sdc_anat_reference or 'none'
+    if sdc_anat_reference not in ('none', 'auto', 'synb0', 't2w', 'invt1w'):
+        raise ValueError(
+            "sdc_anat_reference must be 'none', 'auto', 'synb0', 't2w', or "
+            f"'invt1w', not {sdc_anat_reference!r}."
+        )
     policy = GroupingPolicy(
         separate_all_dwis=separate_all_dwis,
         ignore_fieldmaps=ignore_fieldmaps,
@@ -1137,9 +1128,8 @@ def build_grouping(
         ignore_shims=ignore_shims,
         ignore_fov=ignore_fov,
         ignore_sdc=ignore_sdc,
-        force_t2wreg=force_t2wreg,
-        use_synb0=use_synb0,
-        use_nipreps_syn_sdc=use_nipreps_syn_sdc,
+        sdc_anat_reference=sdc_anat_reference,
+        force_sdc_anat_reference=force_sdc_anat_reference,
         distortion_group_merge=distortion_group_merge,
     )
     issues = list(extra_issues or [])
@@ -1173,9 +1163,8 @@ def build_grouping(
                 application,
                 app_provenance,
                 candidates,
-                force_t2wreg=force_t2wreg,
-                use_synb0=use_synb0,
-                use_nipreps_syn_sdc=use_nipreps_syn_sdc,
+                sdc_anat_reference=sdc_anat_reference,
+                force_sdc_anat_reference=force_sdc_anat_reference,
             )
         )
 
@@ -1277,7 +1266,9 @@ def build_grouping(
         correction_units=correction_units,
         concatenation_groups=concatenation_groups,
         issues=issues,
-        synb0_requested=use_synb0,
+        # Derived, not echoed from a flag: a SyNb0 estimation actually exists,
+        # so the synthetic b=0 is a real structural target for later stages.
+        synb0_requested=any(est.method is CorrectionMethod.SYNB0 for est in estimations.values()),
         policy=policy,
     )
 

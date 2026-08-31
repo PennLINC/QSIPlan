@@ -92,9 +92,9 @@ def _build_parser():
     )
     # Every plan-relevant flag - the method axis (--hmc-method,
     # --shoreline-model, --sdc-method) and the grouping-policy axis (--ignore,
-    # --force, --separate-all-dwis, --use-syn-sdc, --use-synb0,
-    # --distortion-group-merge) - comes from the one spec qsiplan and qsiprep
-    # share, so a flag cannot be spelled two ways across the split.
+    # --force, --separate-all-dwis, --sdc-anat-reference, --distortion-group-merge) -
+    # comes from the one spec qsiplan and qsiprep share, so a flag cannot be
+    # spelled two ways across the split.
     add_plan_arguments(parser)
     parser.add_argument(
         '--html',

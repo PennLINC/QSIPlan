@@ -307,8 +307,9 @@ def test_partial_curation(tmp_path):
 
 
 def test_partial_curation_stranded(tmp_path):
-    """An uncurated series in a curated session gets no inferred PEPOLAR;
-    the fieldmap-less ladder (user-controllable at the CLI) still applies."""
+    """An uncurated series in a curated session gets no inferred PEPOLAR and
+    stays uncorrected by default; an anatomical reference from the CLI still
+    reaches it (it is the only series no fieldmap covers)."""
     grouping = load_scenario('partial_curation_stranded', tmp_path)
 
     assert not [
@@ -318,13 +319,23 @@ def test_partial_curation_stranded(tmp_path):
     ]
     assert 'reverse-pe-not-inferred' in issue_codes(grouping.warnings)
 
-    # The unlinked series is corrected by the inferred T2Wreg fallback, in
-    # its own correction unit; both units are corrected, so their corrected
-    # results are concatenated into ONE final output.
+    # By default the stranded series is uncorrected, so it stands alone:
+    # corrected and uncorrected series never share an output.
     (run2,) = (path for path in grouping.dwi_files if 'run-2' in path)
-    applied = grouping.application[run2]
-    assert grouping.estimations[applied].method is CorrectionMethod.T2WREG
-    (concat,) = grouping.concatenation_groups.values()
+    assert grouping.application[run2] is None
+    outputs = sorted(concat.output_name for concat in grouping.concatenation_groups.values())
+    assert outputs == ['sub-01_dir-AP_run-2', 'sub-01_run-1']
+
+    # With an anatomical reference the stranded series is corrected, in its
+    # own correction unit; both units are corrected, so their corrected
+    # results are concatenated into ONE final output.
+    corrected = load_scenario(
+        'partial_curation_stranded', tmp_path / 'corrected', sdc_anat_reference='t2w'
+    )
+    (run2,) = (path for path in corrected.dwi_files if 'run-2' in path)
+    applied = corrected.application[run2]
+    assert corrected.estimations[applied].method is CorrectionMethod.T2WREG
+    (concat,) = corrected.concatenation_groups.values()
     assert concat.output_name == 'sub-01'
     assert len(concat.correction_units) == 2
 
@@ -678,9 +689,62 @@ def test_per_axis_curated_fmaps_merge_after_correction(tmp_path):
     assert 'output-name-collision' not in issue_codes(grouping.errors)
 
 
-def test_fieldmapless_t2w(tmp_path):
-    """No fieldmap + a T2w: the inferred T2Wreg fallback applies."""
+def test_fieldmapless_t2w_stays_uncorrected_by_default(tmp_path):
+    """Anatomical SDC is opt-in: a subject with a T2w and an uncorrected
+    series gets NO automatic T2Wreg fallback under the default policy."""
     grouping = load_scenario('fieldmapless_t2w', tmp_path)
+
+    assert not grouping.estimations
+    assert set(grouping.application.values()) == {None}
+    for backend in ('fsl', 'tortoise', 'mixed'):
+        assert 'no-sdc' in issue_codes(check_backend(grouping, backend))
+
+
+def test_fieldmapless_t2w_explicit_t2w(tmp_path):
+    """sdc_anat_reference='t2w' corrects the uncorrected series via the T2w."""
+    grouping = load_scenario('fieldmapless_t2w', tmp_path, sdc_anat_reference='t2w')
+
+    assert list(grouping.estimations) == ['auto+t2wreg']
+    estimation = grouping.estimations['auto+t2wreg']
+    assert estimation.method is CorrectionMethod.T2WREG
+    assert estimation.provenance is Provenance.FORCED
+    assert basenames(estimation.sources) == ['sub-01_T2w.nii.gz']
+
+    dwi_path = grouping.dwi_files[0]
+    assert grouping.application[dwi_path] == 'auto+t2wreg'
+    assert grouping.application_provenance[dwi_path] is Provenance.FORCED
+
+    # tortoise executes T2Wreg; explicitly demanded, so fsl/mixed error
+    assert not check_backend(grouping, 'tortoise')
+    for backend in ('fsl', 'mixed'):
+        anat_issues = [
+            issue
+            for issue in check_backend(grouping, backend)
+            if issue.code == 'anat-sdc-unsupported'
+        ]
+        assert anat_issues
+        assert anat_issues[0].severity == 'error'
+
+
+def test_auto_ladder_prefers_synb0_with_a_t1w(tmp_path):
+    """sdc_anat_reference='auto' + a T1w: synb0 wins even when a T2w exists."""
+    grouping = load_scenario('fieldmapless_t2w', tmp_path, sdc_anat_reference='auto')
+
+    assert list(grouping.estimations) == ['auto+synb0']
+    estimation = grouping.estimations['auto+synb0']
+    assert estimation.method is CorrectionMethod.SYNB0
+    assert estimation.provenance is Provenance.INFERRED
+    assert basenames(estimation.sources) == ['sub-01_T1w.nii.gz']
+    assert grouping.synb0_requested
+
+    dwi_path = grouping.dwi_files[0]
+    assert grouping.application[dwi_path] == 'auto+synb0'
+    assert grouping.application_provenance[dwi_path] is Provenance.INFERRED
+
+
+def test_auto_ladder_falls_back_to_t2w_without_a_t1w(tmp_path):
+    """sdc_anat_reference='auto' with only a T2w resolves to T2Wreg (INFERRED)."""
+    grouping = load_scenario('fieldmapless_t2w_only', tmp_path, sdc_anat_reference='auto')
 
     assert list(grouping.estimations) == ['auto+t2wreg']
     estimation = grouping.estimations['auto+t2wreg']
@@ -692,7 +756,7 @@ def test_fieldmapless_t2w(tmp_path):
     assert grouping.application[dwi_path] == 'auto+t2wreg'
     assert grouping.application_provenance[dwi_path] is Provenance.INFERRED
 
-    # tortoise executes T2Wreg; fsl/mixed only warn (nobody demanded it)
+    # Nobody demanded T2Wreg by name: tortoise executes it, fsl/mixed only warn.
     assert not check_backend(grouping, 'tortoise')
     for backend in ('fsl', 'mixed'):
         anat_issues = [
@@ -704,11 +768,11 @@ def test_fieldmapless_t2w(tmp_path):
         assert anat_issues[0].severity == 'warning'
 
 
-def test_ignore_t2w_removes_the_t2wreg_fallback(tmp_path):
-    """``--ignore t2w`` drops the T2w, so the inferred T2Wreg fallback is gone.
+def test_ignore_t2w_removes_the_t2w_from_indexing(tmp_path):
+    """``--ignore t2w`` drops the T2w record entirely.
 
-    The same scenario that yields T2Wreg by default now leaves the series
-    uncorrected (as if there were no T2w at all), and no T2w record is indexed.
+    Nothing anatomical can then be referenced for SDC: the series stays
+    uncorrected and no T2w record is indexed.
     """
     grouping = load_scenario('fieldmapless_t2w', tmp_path, ignore_t2w=True)
 
@@ -718,6 +782,28 @@ def test_ignore_t2w_removes_the_t2wreg_fallback(tmp_path):
     assert not grouping.anat_files('T2w')  # the T2w was never indexed
     for backend in ('fsl', 'tortoise', 'mixed'):
         assert 'no-sdc' in issue_codes(check_backend(grouping, backend))
+
+
+def test_auto_ladder_without_anatomicals_warns(tmp_path):
+    """sdc_anat_reference='auto' with no T1w or T2w corrects nothing, warning."""
+    grouping = load_scenario('fieldmapless_t1w_only', tmp_path, strict=False)
+    records = [record for record in grouping.files.values() if not record.is_anat]
+    regrouped = build_grouping(records, subject_id='01', sdc_anat_reference='auto')
+
+    assert not regrouped.estimations
+    assert set(regrouped.application.values()) == {None}
+    assert 'sdc-anat-reference-auto-no-anatomicals' in issue_codes(regrouped.warnings)
+
+
+def test_force_sdc_anat_reference_requires_a_method(tmp_path):
+    """--force sdc-anat-reference with the 'none' default is an error issue."""
+    with pytest.raises(GroupingError, match='force-sdc-anat-reference-needs-method'):
+        load_scenario('fieldmapless_t2w', tmp_path, force_sdc_anat_reference=True)
+
+    grouping = load_scenario(
+        'fieldmapless_t2w', tmp_path / 'nonstrict', force_sdc_anat_reference=True, strict=False
+    )
+    assert 'force-sdc-anat-reference-needs-method' in issue_codes(grouping.errors)
 
 
 def test_fieldmapless_t1w_only(tmp_path):
@@ -731,8 +817,8 @@ def test_fieldmapless_t1w_only(tmp_path):
 
 
 def test_fieldmapless_t1w_only_synb0(tmp_path):
-    """use_synb0 corrects the same data via a synthetic b=0 from the T1w."""
-    grouping = load_scenario('fieldmapless_t1w_only', tmp_path, use_synb0=True)
+    """sdc_anat_reference='synb0' corrects the same data via a synthetic b=0."""
+    grouping = load_scenario('fieldmapless_t1w_only', tmp_path, sdc_anat_reference='synb0')
 
     assert list(grouping.estimations) == ['auto+synb0']
     estimation = grouping.estimations['auto+synb0']
@@ -749,9 +835,9 @@ def test_fieldmapless_t1w_only_synb0(tmp_path):
         assert not check_backend(grouping, backend)
 
 
-def test_fieldmapless_t1w_only_syn(tmp_path):
-    """use_nipreps_syn_sdc corrects the same data via a classic ANTs SyN registration."""
-    grouping = load_scenario('fieldmapless_t1w_only', tmp_path, use_nipreps_syn_sdc=True)
+def test_fieldmapless_t1w_only_invt1w(tmp_path):
+    """sdc_anat_reference='invt1w' corrects via the classic SyN registration."""
+    grouping = load_scenario('fieldmapless_t1w_only', tmp_path, sdc_anat_reference='invt1w')
 
     assert list(grouping.estimations) == ['auto+syn']
     estimation = grouping.estimations['auto+syn']
@@ -769,8 +855,8 @@ def test_fieldmapless_t1w_only_syn(tmp_path):
 
 
 def test_syn_never_overrides_a_real_fieldmap(tmp_path):
-    """use_nipreps_syn_sdc is a fallback: a series with a fieldmap keeps it."""
-    grouping = load_scenario('gre_phasediff', tmp_path, use_nipreps_syn_sdc=True)
+    """sdc_anat_reference is a fallback: a series with a fieldmap keeps it."""
+    grouping = load_scenario('gre_phasediff', tmp_path, sdc_anat_reference='invt1w')
 
     methods = {est.method for est in grouping.estimations.values()}
     assert CorrectionMethod.NIPREPS_SYN not in methods
@@ -796,10 +882,10 @@ def test_ignore_sdc_disables_all_correction(tmp_path):
 def test_syn_missing_pedir(tmp_path):
     """SyN on a series without PhaseEncodingDirection is a hard error."""
     with pytest.raises(GroupingError, match='syn-missing-pedir'):
-        load_scenario('missing_pedir', tmp_path, use_nipreps_syn_sdc=True)
+        load_scenario('missing_pedir', tmp_path, sdc_anat_reference='invt1w')
 
     grouping = load_scenario(
-        'missing_pedir', tmp_path / 'nonstrict', use_nipreps_syn_sdc=True, strict=False
+        'missing_pedir', tmp_path / 'nonstrict', sdc_anat_reference='invt1w', strict=False
     )
     assert 'syn-missing-pedir' in issue_codes(grouping.errors)
     # The series that does have PE info still gets its SyN estimation.
@@ -816,9 +902,11 @@ def test_t2w_hcp_pepolar_wins(tmp_path):
     assert grouping.anat_files('T2w')
 
 
-def test_t2w_hcp_force_t2wreg(tmp_path):
-    """force_t2wreg overrides the PEPOLAR pairing for every series."""
-    grouping = load_scenario('t2w_hcp', tmp_path, force_t2wreg=True)
+def test_t2w_hcp_forced_t2w_overrides_fieldmap(tmp_path):
+    """force_sdc_anat_reference replaces the PEPOLAR pairing for every series."""
+    grouping = load_scenario(
+        't2w_hcp', tmp_path, sdc_anat_reference='t2w', force_sdc_anat_reference=True
+    )
 
     estimation = grouping.estimations['auto+t2wreg']
     assert estimation.provenance is Provenance.FORCED
@@ -843,7 +931,34 @@ def test_t2w_hcp_force_t2wreg(tmp_path):
 def test_force_t2wreg_requires_t2w(tmp_path):
     """Forcing T2Wreg without a T2w is a hard error."""
     with pytest.raises(GroupingError, match='t2wreg-requires-t2w'):
-        load_scenario('hcp_style', tmp_path, force_t2wreg=True)
+        load_scenario(
+            'hcp_style', tmp_path, sdc_anat_reference='t2w', force_sdc_anat_reference=True
+        )
+
+
+def test_forced_synb0_overrides_the_pepolar_pairing(tmp_path):
+    """--force sdc-anat-reference escalates the synb0 fallback to an override."""
+    grouping = load_scenario(
+        't2w_hcp', tmp_path, sdc_anat_reference='synb0', force_sdc_anat_reference=True
+    )
+
+    estimation = grouping.estimations['auto+synb0']
+    assert estimation.method is CorrectionMethod.SYNB0
+    assert estimation.provenance is Provenance.FORCED
+    assert set(grouping.application.values()) == {'auto+synb0'}
+    assert grouping.synb0_requested
+    # The losing PEPOLAR estimation stays visible (unapplied) for the report.
+    assert 'auto+pepolar+j' in grouping.estimations
+
+
+def test_synb0_fallback_defers_to_a_real_fieldmap(tmp_path):
+    """Un-forced, the synb0 fallback does nothing when fieldmaps cover everything."""
+    grouping = load_scenario('t2w_hcp', tmp_path, sdc_anat_reference='synb0')
+
+    assert list(grouping.estimations) == ['auto+pepolar+j']
+    assert set(grouping.application.values()) == {'auto+pepolar+j'}
+    # No SyNb0 estimation exists, so no synthetic b=0 is available either.
+    assert not grouping.synb0_requested
 
 
 def test_curated_t2wreg(tmp_path):
@@ -870,9 +985,11 @@ def test_curated_t2wreg(tmp_path):
 def test_synb0_missing_pedir(tmp_path):
     """SyNb0 on a series without PhaseEncodingDirection is a hard error."""
     with pytest.raises(GroupingError, match='synb0-missing-pedir'):
-        load_scenario('missing_pedir', tmp_path, use_synb0=True)
+        load_scenario('missing_pedir', tmp_path, sdc_anat_reference='synb0')
 
-    grouping = load_scenario('missing_pedir', tmp_path / 'nonstrict', use_synb0=True, strict=False)
+    grouping = load_scenario(
+        'missing_pedir', tmp_path / 'nonstrict', sdc_anat_reference='synb0', strict=False
+    )
     assert 'synb0-missing-pedir' in issue_codes(grouping.errors)
     # The series that does have PE info still gets its SyNb0 estimation
     assert 'auto+synb0' in grouping.estimations
@@ -1014,13 +1131,22 @@ def test_mixed_refinement_with_rpe_series(tmp_path):
 
 
 def test_synb0_overrides_t2w_as_structural_target(tmp_path):
-    """With use_synb0, the synthetic b=0 replaces the T2w as DRBUDDI's
-    structural target, even though the PEPOLAR estimation is unchanged."""
+    """When a SyNb0 estimation exists (here for the stranded run-2 series),
+    the synthetic b=0 replaces the T2w as DRBUDDI's structural target - even
+    for the series the curated PEPOLAR estimation still corrects."""
     from qsiplan import describe_processing
 
-    grouping = load_scenario('t2w_hcp', tmp_path, use_synb0=True)
-    # The real fieldmap still wins the application contest
-    assert set(grouping.application.values()) == {'auto+pepolar+j'}
+    grouping = load_scenario(
+        'partial_curation_stranded', tmp_path, sdc_anat_reference='synb0', strict=False
+    )
+    # The curated fieldmap still wins for the run-1 pair; run-2 gets SyNb0.
+    applied = {op.basename(path): chosen for path, chosen in grouping.application.items()}
+    assert applied == {
+        'sub-01_dir-AP_run-1_dwi.nii.gz': 'pepolar01',
+        'sub-01_dir-PA_run-1_dwi.nii.gz': 'pepolar01',
+        'sub-01_dir-AP_run-2_dwi.nii.gz': 'auto+synb0',
+    }
+    assert grouping.synb0_requested
     preview = describe_processing(grouping, 'tortoise')
     assert 'a SyNb0 synthetic b=0 (from sub-01_T1w.nii.gz, in place of the T2w image)' in preview
 

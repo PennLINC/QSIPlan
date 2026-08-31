@@ -28,12 +28,15 @@ from .models import DWIGrouping, FileRecord, GroupingPolicy
 
 
 def canonical_explorer_policy(policy: GroupingPolicy | None = None) -> GroupingPolicy:
-    """Canonicalize layered fieldmap-less flags to the explorer's single axis."""
+    """Canonicalize a policy to the explorer's native axes.
+
+    The anatomical-SDC axis is already a single pair of fields; the one
+    cross-field constraint is that ``force_sdc_anat_reference`` selects nothing without
+    a method, so it is cleared when ``sdc_anat_reference`` is ``'none'``.
+    """
     policy = policy if policy is not None else GroupingPolicy()
-    if policy.force_t2wreg:
-        return dataclasses.replace(policy, use_synb0=False, use_nipreps_syn_sdc=False)
-    if policy.use_synb0 and policy.use_nipreps_syn_sdc:
-        return dataclasses.replace(policy, use_nipreps_syn_sdc=False)
+    if policy.sdc_anat_reference == 'none' and policy.force_sdc_anat_reference:
+        return dataclasses.replace(policy, force_sdc_anat_reference=False)
     return policy
 
 
@@ -42,11 +45,13 @@ def reachable_policies(base: GroupingPolicy | None = None) -> list[GroupingPolic
 
     The grid mirrors the CLI's policy flags: the six boolean toggles
     (``--separate-all-dwis`` and the ``--ignore`` values fieldmaps/pepolar-dwis/
-    t2w/shims/fov), the mutually exclusive fieldmap-less methods as one axis
-    (automatic, SyN, SyNb0, forced T2Wreg - layering them is reachable at the
-    CLI but resolves to one of these), and the distortion-group merge strategy.
-    The one field outside the grid (``ignore_sdc``) carries ``base``'s value
-    through every combination.
+    t2w/shims/fov), the anatomical-SDC axis as native ``(sdc_anat_reference,
+    force_sdc_anat_reference)`` pairs - every method as a fallback plus every method
+    forced; ``('none', True)`` is invalid and excluded, and ``'auto'`` is
+    excluded because it always content-dedups with the concrete value it
+    resolves to - and the distortion-group merge strategy. The one field
+    outside the grid (``ignore_sdc``) carries ``base``'s value through every
+    combination.
     """
     base = canonical_explorer_policy(base)
     policies = []
@@ -57,7 +62,7 @@ def reachable_policies(base: GroupingPolicy | None = None) -> list[GroupingPolic
         no_t2w,
         no_shims,
         no_fov,
-        fieldmapless,
+        (sdc_anat_reference, force_sdc_anat_reference),
         merge,
     ) in itertools.product(
         (False, True),
@@ -66,7 +71,15 @@ def reachable_policies(base: GroupingPolicy | None = None) -> list[GroupingPolic
         (False, True),
         (False, True),
         (False, True),
-        ('auto', 'syn', 'synb0', 't2wreg'),
+        (
+            ('none', False),
+            ('synb0', False),
+            ('t2w', False),
+            ('invt1w', False),
+            ('synb0', True),
+            ('t2w', True),
+            ('invt1w', True),
+        ),
         ('concat', 'average', 'none'),
     ):
         policies.append(
@@ -78,9 +91,8 @@ def reachable_policies(base: GroupingPolicy | None = None) -> list[GroupingPolic
                 ignore_t2w=no_t2w,
                 ignore_shims=no_shims,
                 ignore_fov=no_fov,
-                use_nipreps_syn_sdc=fieldmapless == 'syn',
-                force_t2wreg=fieldmapless == 't2wreg',
-                use_synb0=fieldmapless == 'synb0',
+                sdc_anat_reference=sdc_anat_reference,
+                force_sdc_anat_reference=force_sdc_anat_reference,
                 distortion_group_merge=merge,
             )
         )

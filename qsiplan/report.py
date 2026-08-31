@@ -471,17 +471,18 @@ def _ids_by_kind(grouping, corrected) -> MethodGroups:
 
 
 def _no_sdc_sentence(grouping) -> str:
-    """Definite no-correction wording: the grouping knows the T2w inventory."""
-    if grouping.anat_files('T2w'):
-        # A T2w exists but no estimation was applied: only possible when the
-        # series has no usable PE information.
+    """Definite no-correction wording for a series no estimation corrects."""
+    if grouping.policy.sdc_anat_reference != 'none':
+        # An anatomical reference was enabled but could not be used for this
+        # series (no usable anatomical image, or missing PE information).
         return (
-            'No fieldmap could be set up (missing phase encoding '
-            'information): susceptibility distortion is NOT corrected.'
+            'No fieldmap could be set up (the anatomical SDC reference could '
+            'not be used for this series): susceptibility distortion is NOT '
+            'corrected.'
         )
     return (
-        'No fieldmap is available and this subject has no T2w image: '
-        'susceptibility distortion is NOT corrected.'
+        'No fieldmap is available and anatomical SDC is not enabled '
+        '(see --sdc-anat-reference): susceptibility distortion is NOT corrected.'
     )
 
 

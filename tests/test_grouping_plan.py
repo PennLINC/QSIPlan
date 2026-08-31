@@ -24,10 +24,10 @@ from qsiplan.validation import BACKENDS
 
 #: (scenario, build kwargs) - every scenario plain, plus the golden flag variants.
 CASES = [(scenario, {}) for scenario in SCENARIOS] + [
-    ('fieldmapless_t1w_only', {'use_nipreps_syn_sdc': True}),
-    ('fieldmapless_t1w_only', {'use_synb0': True}),
-    ('t2w_hcp', {'use_synb0': True}),
-    ('curated_t2wreg', {'force_t2wreg': True}),
+    ('fieldmapless_t1w_only', {'sdc_anat_reference': 'invt1w'}),
+    ('fieldmapless_t1w_only', {'sdc_anat_reference': 'synb0'}),
+    ('t2w_hcp', {'sdc_anat_reference': 'synb0', 'force_sdc_anat_reference': True}),
+    ('curated_t2wreg', {'sdc_anat_reference': 't2w', 'force_sdc_anat_reference': True}),
 ]
 
 
@@ -191,21 +191,27 @@ def test_gre_fieldmap_estimates_after_hmc(tmp_path):
 
 
 def test_tortoise_t2wreg_fallback_stage(tmp_path):
-    plan = _plan_for(tmp_path, 'fieldmapless_t2w', 'tortoise', 'drbuddi')
+    plan = _plan_for(tmp_path, 'fieldmapless_t2w', 'tortoise', 'drbuddi', sdc_anat_reference='t2w')
     (run,) = plan.runs
     assert _role_tool(run) == [('hmc', 'tortoise'), ('estimate+apply', 't2wreg')]
     assert run.stages[1].structural_target == 't2w'
 
 
 def test_eddy_cannot_run_t2wreg(tmp_path):
-    plan = _plan_for(tmp_path, 'fieldmapless_t2w', 'eddy', 'topup')
+    plan = _plan_for(tmp_path, 'fieldmapless_t2w', 'eddy', 'topup', sdc_anat_reference='t2w')
     (run,) = plan.runs
     assert _role_tool(run) == [('hmc', 'eddy')]
     assert any(issue.code == 'anat-sdc-unsupported' for issue in plan.issues)
 
 
 def test_synb0_prefers_synthetic_target_on_tortoise(tmp_path):
-    plan = _plan_for(tmp_path, 't2w_hcp', 'tortoise', 'drbuddi', use_synb0=True)
+    plan = _plan_for(
+        tmp_path,
+        'partial_curation_stranded',
+        'tortoise',
+        'drbuddi',
+        sdc_anat_reference='synb0',
+    )
     targets = {
         stage.structural_target
         for run in plan.runs
@@ -216,7 +222,9 @@ def test_synb0_prefers_synthetic_target_on_tortoise(tmp_path):
 
 
 def test_synb0_feeds_topup_on_eddy(tmp_path):
-    plan = _plan_for(tmp_path, 'fieldmapless_t1w_only', 'eddy', 'topup', use_synb0=True)
+    plan = _plan_for(
+        tmp_path, 'fieldmapless_t1w_only', 'eddy', 'topup', sdc_anat_reference='synb0'
+    )
     (run,) = plan.runs
     assert _role_tool(run) == [('estimate', 'topup'), ('hmc-with-field', 'eddy')]
     topup = run.stages[0]
@@ -228,20 +236,24 @@ def test_synb0_feeds_topup_on_eddy(tmp_path):
 
 def test_synb0_topup_drbuddi_never_refines(tmp_path):
     # There is no reverse phase-encoded dMRI data for a DRBUDDI second stage.
-    plan = _plan_for(tmp_path, 'fieldmapless_t1w_only', 'eddy', 'topup+drbuddi', use_synb0=True)
+    plan = _plan_for(
+        tmp_path, 'fieldmapless_t1w_only', 'eddy', 'topup+drbuddi', sdc_anat_reference='synb0'
+    )
     (run,) = plan.runs
     assert _role_tool(run) == [('estimate', 'topup'), ('hmc-with-field', 'eddy')]
 
 
 @pytest.mark.parametrize(('hmc', 'sdc'), [('eddy', 'drbuddi'), ('shoreline', 'drbuddi')])
 def test_synb0_without_a_consumer_stays_uncorrected(tmp_path, hmc, sdc):
-    plan = _plan_for(tmp_path, 'fieldmapless_t1w_only', hmc, sdc, use_synb0=True)
+    plan = _plan_for(tmp_path, 'fieldmapless_t1w_only', hmc, sdc, sdc_anat_reference='synb0')
     (run,) = plan.runs
     assert _role_tool(run) == [('hmc', hmc)]
 
 
 def test_syn_stage_targets_t1w(tmp_path):
-    plan = _plan_for(tmp_path, 'fieldmapless_t1w_only', 'eddy', 'topup', use_nipreps_syn_sdc=True)
+    plan = _plan_for(
+        tmp_path, 'fieldmapless_t1w_only', 'eddy', 'topup', sdc_anat_reference='invt1w'
+    )
     (run,) = plan.runs
     assert _role_tool(run) == [('hmc', 'eddy'), ('estimate+apply', 'syn')]
     assert run.stages[1].structural_target == 't1w'

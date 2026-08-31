@@ -78,13 +78,12 @@ def test_policy_from_namespace_tolerates_missing_flags():
         separate_all_dwis=True,
         ignore=['fieldmaps'],
         force=[],
-        use_syn_sdc=False,
         distortion_group_merge='concat',
-        # note: no `use_synb0` attribute at all
+        # note: no `sdc_anat_reference` attribute at all
     )
     policy = policy_from_namespace(namespace)
     assert policy == GroupingPolicy(separate_all_dwis=True, ignore_fieldmaps=True)
-    assert policy.use_synb0 is False
+    assert policy.sdc_anat_reference == 'none'
 
 
 def test_ignore_is_one_list_flag_toggling_the_right_fields():
@@ -104,12 +103,22 @@ def test_ignore_rejects_values_qsiplan_does_not_own():
     assert policy_from_namespace(_parser().parse_args(['--ignore', 't2w'])).ignore_t2w
 
 
-def test_presence_flag_reads_as_bool():
+def test_sdc_anat_reference_choice_reads_into_the_policy():
     parser = _parser()
-    assert policy_from_namespace(parser.parse_args([])).use_nipreps_syn_sdc is False
-    assert policy_from_namespace(parser.parse_args(['--use-syn-sdc'])).use_nipreps_syn_sdc is True
-    with_arg = parser.parse_args(['--use-syn-sdc', 'warn'])
-    assert policy_from_namespace(with_arg).use_nipreps_syn_sdc is True
+    assert policy_from_namespace(parser.parse_args([])).sdc_anat_reference == 'none'
+    chosen = parser.parse_args(['--sdc-anat-reference', 'synb0'])
+    assert policy_from_namespace(chosen).sdc_anat_reference == 'synb0'
+    with pytest.raises(SystemExit):
+        parser.parse_args(['--sdc-anat-reference', 'bogus'])
+
+
+def test_force_sdc_anat_reference_reads_into_the_policy():
+    parser = _parser()
+    assert policy_from_namespace(parser.parse_args([])).force_sdc_anat_reference is False
+    namespace = parser.parse_args(['--sdc-anat-reference', 't2w', '--force', 'sdc-anat-reference'])
+    policy = policy_from_namespace(namespace)
+    assert policy.sdc_anat_reference == 't2w'
+    assert policy.force_sdc_anat_reference is True
 
 
 def test_selection_from_namespace_bridges_to_selection_for_config():
@@ -138,8 +147,8 @@ def test_shoreline_model_requires_shoreline():
         GroupingPolicy(ignore_fieldmaps=True, ignore_shims=True),
         GroupingPolicy(ignore_pepolar_dwis=True, ignore_fieldmaps=True),
         GroupingPolicy(ignore_sdc=True, separate_all_dwis=True),
-        GroupingPolicy(use_nipreps_syn_sdc=True, distortion_group_merge='none'),
-        GroupingPolicy(force_t2wreg=True, use_synb0=True),
+        GroupingPolicy(sdc_anat_reference='invt1w', distortion_group_merge='none'),
+        GroupingPolicy(sdc_anat_reference='t2w', force_sdc_anat_reference=True),
     ],
 )
 def test_cli_phrase_round_trips_through_the_parser(policy):
@@ -161,5 +170,12 @@ def test_owned_choices_are_the_conformance_contract():
         'fov',
     }
     assert by_flag['--ignore'].extendable  # qsiprep adds phase
-    assert not by_flag['--use-synb0'].planned  # wired: qsiprep exposes the flag
+    assert set(by_flag['--force'].owned_choices()) == {'sdc-anat-reference'}
+    assert set(by_flag['--sdc-anat-reference'].owned_choices()) == {
+        'none',
+        'auto',
+        'synb0',
+        't2w',
+        'invt1w',
+    }
     assert by_flag['--hmc-method'].kind is Kind.CHOICE

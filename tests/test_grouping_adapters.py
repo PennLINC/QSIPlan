@@ -290,7 +290,7 @@ def test_gre_phasediff_shape(tmp_path):
 
 def test_t2wreg_is_fieldmapless(tmp_path):
     """T2Wreg is fieldmap-less; SDC is driven by the t2wreg plan stage elsewhere."""
-    (unit,) = _units('fieldmapless_t2w', tmp_path)
+    (unit,) = _units('fieldmapless_t2w', tmp_path, sdc_anat_reference='t2w')
     assert unit.using_t2w_for_sdc
     assert not unit.has_scanner_measured_fieldmap
     assert unit.dwi_files
@@ -305,14 +305,14 @@ def test_uncorrected_units_have_no_method(tmp_path):
 
 def test_syn_unit_shape(tmp_path):
     """SyN units expose is_nipreps_syn and no scanner-measured fieldmap."""
-    (unit,) = _units('fieldmapless_t1w_only', tmp_path, use_nipreps_syn_sdc=True)
+    (unit,) = _units('fieldmapless_t1w_only', tmp_path, sdc_anat_reference='invt1w')
     assert unit.is_nipreps_syn
     assert not unit.has_scanner_measured_fieldmap
 
 
 def test_synb0_unit_shape(tmp_path):
     """SyNb0 units carry their method; the synthesis workflow arrives later."""
-    (unit,) = _units('fieldmapless_t1w_only', tmp_path, use_synb0=True)
+    (unit,) = _units('fieldmapless_t1w_only', tmp_path, sdc_anat_reference='synb0')
     assert unit.method is CorrectionMethod.SYNB0
     assert not unit.has_scanner_measured_fieldmap
 

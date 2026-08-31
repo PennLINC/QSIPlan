@@ -9,7 +9,6 @@ recompiles the plan; and the explorer page embeds one rendering per
 import json
 import re
 
-import pytest
 from grouping_scenarios import build_layout
 
 from qsiplan import index_subject, render_explorer_html
@@ -48,24 +47,30 @@ def test_selection_key_is_sorted():
 
 
 def test_combined_key_composes_both_axes():
-    policy = GroupingPolicy(use_synb0=True)
+    policy = GroupingPolicy(sdc_anat_reference='synb0')
     selection = selection_for_config('eddy', 'topup')
-    assert combined_key(policy, selection) == 'hmc-method=eddy&sdc-method=topup&use-synb0=1'
+    assert (
+        combined_key(policy, selection)
+        == 'hmc-method=eddy&sdc-anat-reference=synb0&sdc-method=topup'
+    )
     assert combined_key(GroupingPolicy(), selection) == selection.combination_key()
 
 
 def test_reachable_policies_cover_the_grid():
     policies = reachable_policies()
-    # separate + ignore(fieldmaps, pepolar-dwis, t2w, shims, fov) + fieldmapless(4) + merge(3)
-    assert len(policies) == 2 * 2 * 2 * 2 * 2 * 2 * 4 * 3
+    # separate + ignore(fieldmaps, pepolar-dwis, t2w, shims, fov)
+    # + anat-sdc (reference, forced) pairs(7) + merge(3)
+    assert len(policies) == 2 * 2 * 2 * 2 * 2 * 2 * 7 * 3
     keys = {policy.policy_key() for policy in policies}
     assert len(keys) == len(policies)  # every combination spells uniquely
     assert '' in keys  # the all-defaults policy
-    # The fieldmap-less methods (SyN, SyNb0, T2Wreg) are one axis: never layered.
+    # Forcing is only offered with a concrete method, and 'auto' never appears
+    # in the grid (it content-dedups with whatever it resolves to).
     assert all(
-        sum([policy.use_nipreps_syn_sdc, policy.use_synb0, policy.force_t2wreg]) <= 1
+        policy.sdc_anat_reference != 'none' or not policy.force_sdc_anat_reference
         for policy in policies
     )
+    assert all(policy.sdc_anat_reference != 'auto' for policy in policies)
 
 
 def test_cli_phrase_composes_ignore_as_one_flag():
@@ -84,8 +89,12 @@ def test_cli_phrase_composes_ignore_as_one_flag():
         GroupingPolicy(separate_all_dwis=True, ignore_fov=True).cli_phrase()
         == '--separate-all-dwis --ignore fov'
     )
-    # The fieldmap-less flags stay separate and real (never folded into --ignore).
-    assert GroupingPolicy(use_nipreps_syn_sdc=True).cli_phrase() == '--use-syn-sdc'
+    # The anatomical-SDC flags stay separate and real (never folded into --ignore).
+    assert (
+        GroupingPolicy(sdc_anat_reference='invt1w').cli_phrase() == '--sdc-anat-reference invt1w'
+    )
+    forced = GroupingPolicy(sdc_anat_reference='t2w', force_sdc_anat_reference=True)
+    assert forced.cli_phrase() == '--sdc-anat-reference t2w --force sdc-anat-reference'
 
 
 def test_noop_toggle_collapses_by_content(tmp_path):
@@ -191,10 +200,12 @@ def test_explorer_page_embeds_the_factored_index(tmp_path):
     assert 'data-part="ignore-fieldmaps=1"' in page
     assert 'data-part="ignore-pepolar-dwis=1"' in page
     assert 'value="distortion-group-merge=average"' in page
-    # The --ignore values render as one flag's checkboxes, and the real
-    # fieldmap-less flag --use-syn-sdc is offered alongside --use-synb0.
+    # The --ignore values render as one flag's checkboxes, and the
+    # --sdc-anat-reference select offers every method plus its forced variant
+    # (a composite option value carrying both canonical key parts).
     assert 'class="ignore-group"' in page
-    assert 'value="use-syn-sdc=1"' in page
+    assert 'value="sdc-anat-reference=invt1w"' in page
+    assert 'value="sdc-anat-reference=t2w&force-sdc-anat-reference=1"' in page
     assert 'class="grouping-view"' in page
     assert 'class="grouping-notes"' in page
 
@@ -229,21 +240,9 @@ def test_explorer_preserves_fixed_ignore_sdc_policy(tmp_path):
     assert 'const parts = [...(index.fixedPolicyParts || [])]' in page
 
 
-@pytest.mark.parametrize(
-    ('policy', 'canonical_key'),
-    [
-        (
-            GroupingPolicy(force_t2wreg=True, use_nipreps_syn_sdc=True),
-            'force-t2wreg=1',
-        ),
-        (
-            GroupingPolicy(use_synb0=True, use_nipreps_syn_sdc=True),
-            'use-synb0=1',
-        ),
-    ],
-)
-def test_explorer_canonicalizes_layered_fieldmapless_flags(tmp_path, policy, canonical_key):
-    """Valid layered CLI flags resolve to the explorer's mutually exclusive axis."""
+def test_explorer_canonicalizes_force_without_method(tmp_path):
+    """force_sdc_anat_reference without a method resolves to the plain policy."""
+    policy = GroupingPolicy(force_sdc_anat_reference=True)
     records, issues = _indexed('fieldmapless_t2w', tmp_path)
     page = render_explorer_html(
         records,
@@ -252,7 +251,7 @@ def test_explorer_canonicalizes_layered_fieldmapless_flags(tmp_path, policy, can
         initial_policy=policy,
     )
     index = _embedded_index(page)
-    assert canonical_key in index['policies']
+    assert '' in index['policies']
     assert policy.policy_key() not in index['policies']
 
 

@@ -2,7 +2,9 @@
 # B0FieldIdentifier/Source, and the only uncurated series (run-2 AP) has no
 # uncurated reverse phase-encoded partner. Expected: run-2 gets NO inferred
 # PEPOLAR estimation (curated series are never pooled with uncurated ones),
-# a reverse-pe-not-pooled warning, and the T2Wreg fallback via the T2w.
+# a reverse-pe-not-pooled warning, and no correction by default (anatomical
+# SDC is opt-in; with sdc_anat_reference='synb0' the run-2 series gets a SyNb0
+# estimation while the run-1 pair keeps its curated PEPOLAR).
 '01':
   - anat:
       - suffix: T1w

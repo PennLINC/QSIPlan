@@ -296,12 +296,9 @@ def parse_combined_key(key: str):
     and omits behave as defaults, exactly like the CLI. Unknown names or
     malformed values raise :class:`ValueError` - the server's 400.
     """
-    policy_fields = {}
-    for field in dataclasses.fields(GroupingPolicy):
-        name = field.name.replace('_', '-')
-        if name == 'use-nipreps-syn-sdc':  # keyed by its qsiprep flag spelling
-            name = 'use-syn-sdc'
-        policy_fields[name] = field
+    policy_fields = {
+        field.name.replace('_', '-'): field for field in dataclasses.fields(GroupingPolicy)
+    }
 
     policy_kwargs = {}
     hmc = sdc = model = None
@@ -323,6 +320,9 @@ def parse_combined_key(key: str):
                 policy_kwargs[field.name] = True
             else:
                 if name == 'distortion-group-merge' and value not in ('concat', 'average', 'none'):
+                    raise ValueError(f'Unknown {name} value: {value!r}')
+                anat_values = ('none', 'auto', 'synb0', 't2w', 'invt1w')
+                if name == 'sdc-anat-reference' and value not in anat_values:
                     raise ValueError(f'Unknown {name} value: {value!r}')
                 policy_kwargs[field.name] = value
         else:
