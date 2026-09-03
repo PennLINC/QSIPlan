@@ -1,7 +1,7 @@
 # QSIPlan
 
-[![tests](https://github.com/PennLINC/QSIPlan/actions/workflows/tests.yml/badge.svg)](https://github.com/PennLINC/QSIPlan/actions/workflows/tests.yml)
-[![codecov](https://codecov.io/gh/PennLINC/QSIPlan/branch/main/graph/badge.svg)](https://codecov.io/gh/PennLINC/QSIPlan)
+[![tests](https://github.com/PennLINC/qsiplan/actions/workflows/tests.yml/badge.svg)](https://github.com/PennLINC/qsiplan/actions/workflows/tests.yml)
+[![codecov](https://codecov.io/gh/PennLINC/qsiplan/branch/main/graph/badge.svg)](https://codecov.io/gh/PennLINC/qsiplan)
 
 Plan and explain [qsiprep](https://github.com/PennLINC/qsiprep)'s
 diffusion-MRI preprocessing from BIDS metadata and configuration flags.
