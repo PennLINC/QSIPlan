@@ -973,6 +973,7 @@ def _policy_controls(policy: GroupingPolicy) -> str:
         '<span class="ignore-group"><span class="flag-name">--ignore</span>'
         + box('ignore-fieldmaps=1', 'fieldmaps', policy.ignore_fieldmaps)
         + box('ignore-pepolar-dwis=1', 'pepolar-dwis', policy.ignore_pepolar_dwis)
+        + box('ignore-t2w=1', 't2w', policy.ignore_t2w)
         + box('ignore-shims=1', 'shims', policy.ignore_shims)
         + box('ignore-fov=1', 'fov', policy.ignore_fov)
         + '</span>'
@@ -1180,4 +1181,114 @@ def render_html(grouping: DWIGrouping, selections=None) -> str:
         f'<title>DWI grouping for sub-{_esc(grouping.subject_id)}</title>\n'
         '<style>body{margin:0}</style></head>\n'
         f'<body>{_fragment(grouping, past=False, selections=selections)}</body></html>'
+    )
+
+
+# ---------------------------------------------------------------------------
+# Cohort dashboard: the group-level analog of the single-subject explorer.
+# Partition-by-plan-signature is computed in :mod:`qsiplan.cohort`; this page
+# renders the embedded partition and re-partitions client-side when the method
+# or granularity control changes, exactly like the single-subject explorer's
+# provider seam - the same "the diagram reacts to the flags" idea, one level up.
+# ---------------------------------------------------------------------------
+
+
+def _cohort_assets():
+    """The cohort dashboard's (css, js) assets, kept in ``data/`` like the viewers."""
+    from .data import load
+
+    return (
+        load.readable('cohort_dashboard.css').read_text(),
+        load.readable('cohort_dashboard.js').read_text(),
+    )
+
+
+def _cohort_controls(data) -> str:
+    methods = ''.join(
+        f'<button data-method="{_esc(m["key"])}">{_esc(m["key"])}</button>'
+        for m in data['methods']
+    )
+    gran = (
+        '<button data-gran="session">session</button>'
+        '<button data-gran="subject">subject</button>'
+        if any(e['sessions'] for e in data['subject'])
+        else '<button data-gran="subject">subject</button>'
+    )
+    return (
+        '<div class="toolbar">'
+        '<div class="ctl"><span class="ctl-label">Motion correction</span>'
+        f'<div class="seg" role="group" aria-label="Head motion method">{methods}</div></div>'
+        '<div class="ctl"><span class="ctl-label">Group by</span>'
+        f'<div class="seg" role="group" aria-label="Granularity">{gran}</div></div>'
+        '</div>'
+    )
+
+
+def cohort_page_html(data, *, live=False) -> str:
+    """Render the cohort dashboard page from a :func:`~.cohort.build_cohort_data` embed."""
+    data = dict(data)
+    data['hrefTemplate'] = '/sub-%s' if live else 'sub-%s.html'
+    summary = data.get('summary', {})
+    controls = _cohort_controls(data)
+    css, js = _cohort_assets()
+    fonts = (
+        '<link rel="preconnect" href="https://fonts.googleapis.com">'
+        '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+        '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?'
+        'family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">'
+    )
+    n_sub = summary.get('subjects', 0)
+    n_ses = summary.get('sessions', 0)
+    swatch = (
+        'background:repeating-linear-gradient(-45deg,transparent,transparent 4px,'
+        'var(--line) 4px,var(--line) 5px);border:1px dashed var(--line-2)'
+    )
+    body = (
+        '<div class="wrap">'
+        '<header class="top"><div>'
+        '<span class="eyebrow">qsiplan · cohort grouping</span>'
+        '<h1>Cohort Grouping Map</h1></div>'
+        f'<div class="dsmeta"><span><b class="num">{n_sub}</b> subjects</span>'
+        f'<span><b class="num">{n_ses}</b> sessions</span></div>'
+        '</header>' + controls + '<div class="headline"><div class="verdict" id="verdict">'
+        '<div class="vline" id="vline"></div><div class="vsub" id="vsub"></div></div>'
+        '<div class="stats">'
+        '<div class="stat"><div class="v num" id="wfVal">0</div>'
+        '<div class="k">distinct workflows</div></div>'
+        '<div class="stat alert" id="errStat"><div class="v num" id="errVal">0</div>'
+        '<div class="k">blocking errors</div></div>'
+        '<div class="stat" style="grid-column:1/3"><div class="v num" id="offVal">0</div>'
+        '<div class="k" id="offKey">off-majority</div></div>'
+        '</div></div>'
+        '<div class="section"><div class="shead"><h2>Workflow equivalence classes</h2>'
+        '<span class="hint">every entity sorted by the pipeline it produces &mdash; '
+        'largest class first</span></div>'
+        '<div class="classes" id="classes"></div></div>'
+        '<div class="section panel"><h3>Data completeness</h3>'
+        '<p class="sub">DWI series per subject &times; session, and T2w presence. '
+        'Cells colored by workflow class.</p>'
+        '<table class="cmx" id="matrix"></table>'
+        '<div class="legend">'
+        '<span><i style="background:var(--good-soft);border:1px solid var(--good-line)"></i>'
+        ' class A</span>'
+        '<span><i style="background:var(--warn-soft);border:1px solid var(--warn-line)"></i>'
+        ' class B</span>'
+        '<span><i style="background:var(--accent-soft);border:1px solid var(--accent-2)"></i>'
+        ' class C+</span>'
+        f'<span><i style="{swatch}"></i> absent</span></div>'
+        '</div>'
+        '<div class="foot">Click any subject to open its live grouping explorer &mdash; the same '
+        '<b>plan compiler</b> that partitions this page. Classes are one '
+        '<code>plan_signature()</code> over the session-sliced plan; the matrix is the data axis.'
+        '</div>'
+        '</div>'
+        f'<script type="application/json" id="cohort-data">{_embedded_json(data)}</script>'
+        f'<script>{js}</script>'
+    )
+    return (
+        '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">\n'
+        '<title>Cohort Grouping Map</title>\n'
+        f'{fonts}\n<style>{css}</style></head>\n'
+        f'<body>{body}</body></html>'
     )

@@ -396,6 +396,7 @@ def index_subject(
     layout,
     subject_data: dict,
     ignore_fieldmaps: bool = False,
+    ignore_t2w: bool = False,
     b0_threshold: float | None = None,
 ) -> tuple[list[FileRecord], list[GroupingIssue]]:
     """Build a :class:`~.models.FileRecord` for every relevant image.
@@ -418,6 +419,9 @@ def index_subject(
     ignore_fieldmaps : bool
         Skip fmap/ indexing entirely (``--ignore fieldmaps``). The DWI-based
         PEPOLAR heuristic still applies downstream.
+    ignore_t2w : bool
+        Skip T2w indexing entirely (``--ignore t2w``), so no T2w is available
+        for T2Wreg fieldmap-less correction. T1w indexing is unaffected.
     """
     issues: list[GroupingIssue] = []
     dwi_files = [op.abspath(path) for path in subject_data.get('dwi', [])]
@@ -434,9 +438,14 @@ def index_subject(
             layout, subject_data, subject_id, 'fmap', 'fmap', FMAP_SUFFIXES
         )
 
+    t2w_files = (
+        []
+        if ignore_t2w
+        else _collect_datatype_files(layout, subject_data, subject_id, 't2w', 'anat', ('T2w',))
+    )
     anat_files = sorted(
         _collect_datatype_files(layout, subject_data, subject_id, 't1w', 'anat', ('T1w',))
-        + _collect_datatype_files(layout, subject_data, subject_id, 't2w', 'anat', ('T2w',))
+        + t2w_files
     )
 
     all_files = sorted(known_dwi_files) + sorted(fmap_files) + anat_files

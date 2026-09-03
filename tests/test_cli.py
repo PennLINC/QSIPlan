@@ -56,10 +56,41 @@ def test_cli_exit_code_reflects_grouping_errors(tmp_path, capsys):
     assert 'output-name-collision' in capsys.readouterr().out
 
 
-def test_cli_serve_and_html_are_mutually_exclusive(tmp_path, capsys):
+def test_cli_serve_and_static_outputs_are_mutually_exclusive(tmp_path, capsys):
     bids_dir = _materialize('hcp_style', tmp_path)
-    with pytest.raises(SystemExit, match='mutually exclusive'):
+    with pytest.raises(SystemExit, match='cannot be combined'):
         main([str(bids_dir), '--serve', '--html', str(tmp_path / 'x.html')])
+    with pytest.raises(SystemExit, match='cannot be combined'):
+        main([str(bids_dir), '--serve', '--cohort-html', str(tmp_path / 'c.html')])
+
+
+def test_cli_cohort_html_writes_dashboard_and_subject_siblings(tmp_path, capsys):
+    bids_dir = _materialize('multi_session', tmp_path)
+    cohort = tmp_path / 'cohort.html'
+    assert main([str(bids_dir), '--cohort-html', str(cohort), '--hmc-method', 'shoreline']) == 0
+    page = cohort.read_text()
+    assert 'Cohort Grouping Map' in page
+    # The dashboard drills into sibling per-subject explorer pages that exist.
+    sibling = tmp_path / 'sub-01.html'
+    assert sibling.exists()
+    assert 'class="plan-explorer"' in sibling.read_text()
+    assert '"hrefTemplate": "sub-%s.html"' in page
+
+
+def test_cli_serve_passes_host_and_port(tmp_path, monkeypatch):
+    bids_dir = _materialize('hcp_style', tmp_path)
+    import qsiplan.serve as serve
+
+    captured = {}
+
+    def fake_run_server(app, host='127.0.0.1', port=8765):
+        captured['host'], captured['port'] = host, port
+        return 0
+
+    monkeypatch.setattr(serve, 'run_server', fake_run_server)
+    all_ifaces = '0.0.0.0'  # noqa: S104 - asserting the flag threads through, not binding
+    assert main([str(bids_dir), '--serve', '--host', all_ifaces, '--port', '9999']) == 0
+    assert captured == {'host': all_ifaces, 'port': 9999}
 
 
 def test_cli_multi_subject_writes_per_subject_pages(tmp_path, capsys):

@@ -55,7 +55,7 @@ def test_parse_combined_key_rejects_malformed_keys():
         parse_combined_key('hmc-method=eddy&sdc-method=topup&distortion-group-merge=maybe')
 
 
-@pytest.fixture
+@pytest.fixture()
 def served(tmp_path):
     layout, subject_data = build_layout('abcd_style', tmp_path)
     records, issues = index_subject(layout, subject_data)
@@ -140,8 +140,29 @@ def test_view_errors_are_http_errors(served):
     assert excinfo.value.code == 404
 
 
-def test_multi_subject_root_lists_subjects(tmp_path):
-    layout, _ = build_layout('abcd_style', tmp_path)
+def _duplicate_subject(bids_dir, src='01', dst='02'):
+    """Copy sub-<src> to sub-<dst> so a scenario yields a two-subject cohort."""
+    import os
+    import shutil
+
+    src_dir, dst_dir = bids_dir / f'sub-{src}', bids_dir / f'sub-{dst}'
+    shutil.copytree(src_dir, dst_dir)
+    for root, _dirs, files in os.walk(dst_dir):
+        for name in files:
+            if f'sub-{src}' in name:
+                os.rename(
+                    os.path.join(root, name),
+                    os.path.join(root, name.replace(f'sub-{src}', f'sub-{dst}')),
+                )
+
+
+def test_multi_subject_root_shows_cohort_dashboard(tmp_path):
+    build_layout('abcd_style', tmp_path)
+    bids = tmp_path / 'abcd_style'
+    _duplicate_subject(bids)
+    from bids import BIDSLayout
+
+    layout = BIDSLayout(str(bids), validate=False)
     app = ExplorerApp(layout, ['01', '02'])
     server = make_server(app)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -149,20 +170,39 @@ def test_multi_subject_root_lists_subjects(tmp_path):
     try:
         status, page = _get(f'http://127.0.0.1:{server.server_address[1]}/')
         assert status == 200
-        assert '/sub-01' in page
-        assert '/sub-02' in page
+        # The root is now the cohort dashboard, not a plain link list.
+        assert 'Cohort Grouping Map' in page
+        embed = json.loads(re.search(r'id="cohort-data">(.*?)</script>', page, re.DOTALL).group(1))
+        assert {e['subject'] for e in embed['subject']} == {'01', '02'}
     finally:
         server.shutdown()
         server.server_close()
 
 
-def test_multi_subject_root_escapes_and_quotes_labels():
-    app = ExplorerApp(None, ['safe', 'odd/"<label>'])
-    page = app.index_page()
-    assert 'sub-safe' in page
-    assert '/sub-odd%2F%22%3Clabel%3E' in page
-    assert 'sub-odd/&quot;&lt;label&gt;' in page
-    assert 'sub-odd/"<label>' not in page
+def test_cohort_page_embeds_labels_without_html_injection():
+    from qsiplan.interactive import cohort_page_html
+
+    facts = {'sig': 'a1', 'outputs': 1, 'runs': 1, 'errors': 0, 'warnings': 0}
+    data = {
+        'methods': [{'key': 'eddy', 'label': 'eddy', 'cli': '--hmc-method eddy'}],
+        'session': [],
+        'subject': [
+            {
+                'subject': 'x</script><img src=x onerror=alert(1)>',
+                'label': 'x',
+                'sessions': [],
+                'scans': 1,
+                't2w': False,
+                'byMethod': {'eddy': facts},
+            }
+        ],
+        'defaultGranularity': 'subject',
+        'defaultMethod': 'eddy',
+        'summary': {'subjects': 1, 'sessions': 0},
+    }
+    page = cohort_page_html(data, live=True)
+    # The embedded JSON must not let a label close the script element.
+    assert '</script><img' not in page
 
 
 def test_server_caches_are_bounded_and_policies_compile_on_demand(tmp_path):

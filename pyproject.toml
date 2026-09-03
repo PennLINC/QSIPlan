@@ -11,7 +11,7 @@ license = { file = "LICENSE" }
 requires-python = ">=3.11"
 authors = [{ name = "The PennLINC developers" }]
 dependencies = [
-    "bids2table >= 2.2.1, != 2.3.0",
+    "bids2table >= 2.3.1",
     "nibabel",
     "numpy",
 ]
@@ -26,7 +26,7 @@ tests = [
 qsiplan = "qsiplan.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/PennLINC/qsiprep"
+Homepage = "https://github.com/PennLINC/qsiplan"
 
 [tool.hatch.build.targets.wheel]
 packages = ["qsiplan"]

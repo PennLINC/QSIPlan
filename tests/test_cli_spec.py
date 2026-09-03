@@ -96,10 +96,12 @@ def test_ignore_is_one_list_flag_toggling_the_right_fields():
 
 
 def test_ignore_rejects_values_qsiplan_does_not_own():
-    # t2w/phase are qsiprep-only --ignore choices; qsiplan's parser must not
-    # silently accept them (they would map to no grouping field).
+    # 'phase' is a qsiprep-only --ignore choice; qsiplan's parser must not
+    # silently accept it (it would map to no grouping field). 't2w' *is* owned
+    # by qsiplan now (it drops the T2Wreg fieldmap-less fallback).
     with pytest.raises(SystemExit):
-        _parser().parse_args(['--ignore', 't2w'])
+        _parser().parse_args(['--ignore', 'phase'])
+    assert policy_from_namespace(_parser().parse_args(['--ignore', 't2w'])).ignore_t2w
 
 
 def test_presence_flag_reads_as_bool():
@@ -153,10 +155,11 @@ def test_owned_choices_are_the_conformance_contract():
     assert set(by_flag['--ignore'].owned_choices()) == {
         'fieldmaps',
         'pepolar-dwis',
+        't2w',
         'sdc',
         'shims',
         'fov',
     }
-    assert by_flag['--ignore'].extendable  # qsiprep adds t2w/phase
+    assert by_flag['--ignore'].extendable  # qsiprep adds phase
     assert not by_flag['--use-synb0'].planned  # wired: qsiprep exposes the flag
     assert by_flag['--hmc-method'].kind is Kind.CHOICE

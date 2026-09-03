@@ -132,6 +132,7 @@ def build_dwi_grouping(
     separate_all_dwis=False,
     ignore_fieldmaps=False,
     ignore_pepolar_dwis=False,
+    ignore_t2w=False,
     ignore_shims=False,
     ignore_fov=False,
     ignore_sdc=False,
@@ -159,6 +160,11 @@ def build_dwi_grouping(
     ignore_fieldmaps : bool
         Do not index ``fmap/``. The reverse phase-encoding DWI heuristic
         still applies.
+    ignore_t2w : bool
+        Do not index T2w images, so no T2w is available for T2Wreg
+        fieldmap-less correction (``--ignore t2w``). T1w indexing is
+        unaffected; a fieldmap-less series then falls back to SyNb0/SyN if
+        requested, or is left uncorrected.
     ignore_pepolar_dwis : bool
         Never pair DWI series with each other to estimate a PEPOLAR fieldmap:
         drop every PEPOLAR estimation whose sources are all DWIs, inferred or
@@ -214,6 +220,7 @@ def build_dwi_grouping(
         layout,
         subject_data,
         ignore_fieldmaps=ignore_fieldmaps,
+        ignore_t2w=ignore_t2w,
         b0_threshold=b0_threshold,
     )
     subject_id = parse_file_entities(records[0].path)['subject']
@@ -223,6 +230,7 @@ def build_dwi_grouping(
         separate_all_dwis=separate_all_dwis,
         ignore_fieldmaps=ignore_fieldmaps,
         ignore_pepolar_dwis=ignore_pepolar_dwis,
+        ignore_t2w=ignore_t2w,
         ignore_shims=ignore_shims,
         ignore_fov=ignore_fov,
         ignore_sdc=ignore_sdc,

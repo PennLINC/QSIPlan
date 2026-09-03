@@ -704,6 +704,22 @@ def test_fieldmapless_t2w(tmp_path):
         assert anat_issues[0].severity == 'warning'
 
 
+def test_ignore_t2w_removes_the_t2wreg_fallback(tmp_path):
+    """``--ignore t2w`` drops the T2w, so the inferred T2Wreg fallback is gone.
+
+    The same scenario that yields T2Wreg by default now leaves the series
+    uncorrected (as if there were no T2w at all), and no T2w record is indexed.
+    """
+    grouping = load_scenario('fieldmapless_t2w', tmp_path, ignore_t2w=True)
+
+    assert grouping.policy.ignore_t2w
+    assert not grouping.estimations
+    assert set(grouping.application.values()) == {None}
+    assert not grouping.anat_files('T2w')  # the T2w was never indexed
+    for backend in ('fsl', 'tortoise', 'mixed'):
+        assert 'no-sdc' in issue_codes(check_backend(grouping, backend))
+
+
 def test_fieldmapless_t1w_only(tmp_path):
     """No fieldmap and no T2w: genuinely uncorrectable by default."""
     grouping = load_scenario('fieldmapless_t1w_only', tmp_path)

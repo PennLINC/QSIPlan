@@ -56,7 +56,8 @@ def test_combined_key_composes_both_axes():
 
 def test_reachable_policies_cover_the_grid():
     policies = reachable_policies()
-    assert len(policies) == 2 * 2 * 2 * 2 * 2 * 4 * 3
+    # separate + ignore(fieldmaps, pepolar-dwis, t2w, shims, fov) + fieldmapless(4) + merge(3)
+    assert len(policies) == 2 * 2 * 2 * 2 * 2 * 2 * 4 * 3
     keys = {policy.policy_key() for policy in policies}
     assert len(keys) == len(policies)  # every combination spells uniquely
     assert '' in keys  # the all-defaults policy

@@ -36,7 +36,21 @@ Fetch some test data
 """
 
 import itertools
+import os
 from pathlib import Path
+
+
+def _norm(path):
+    """Absolute, lexically-normalized path that does *not* follow symlinks.
+
+    ``Path.resolve()`` follows symlinks, which moves a git-annex/datalad data
+    file (a symlink into ``.git/annex/objects``) out of its BIDS directory, so
+    its JSON/bval/bvec sidecars -- which sit beside the *symlink*, not the
+    annex object -- can no longer be found. Lexical normalization with
+    :func:`os.path.abspath` keeps the file at its BIDS location while still
+    resolving ``.`` and ``..``.
+    """
+    return Path(os.path.abspath(path))
 
 
 def find_bids_root(path):
@@ -53,7 +67,7 @@ def find_bids_root(path):
         The closest ancestor directory holding a ``dataset_description.json``,
         or ``None`` if ``path`` is not inside a BIDS dataset.
     """
-    for parent in Path(path).resolve().parents:
+    for parent in _norm(path).parents:
         if (parent / 'dataset_description.json').is_file():
             return parent
 
@@ -140,8 +154,8 @@ def _inheritance_levels(path, root=None):
     already been copied into a working directory -- only ever match files
     sitting beside them.
     """
-    path = Path(path).resolve()
-    root = Path(root).resolve() if root is not None else find_bids_root(path)
+    path = _norm(path)
+    root = _norm(root) if root is not None else find_bids_root(path)
     if root is None:
         return [path.parent]
     if root != path.parent and root not in path.parents:
@@ -220,9 +234,9 @@ class BIDSInheritanceIndex:
 
     def __init__(self, targets, extensions=('.json', '.bval', '.bvec'), root=None):
         self._extensions = frozenset(extensions)
-        self._root = Path(root).resolve() if root is not None else None
+        self._root = _norm(root) if root is not None else None
         self._levels = {
-            str(Path(target).resolve()): tuple(_inheritance_levels(target, self._root))
+            str(_norm(target)): tuple(_inheritance_levels(target, self._root))
             for target in targets
         }
         unique_levels = {level for levels in self._levels.values() for level in levels}
@@ -241,7 +255,7 @@ class BIDSInheritanceIndex:
 
     def find(self, path, extension):
         """Applicable files, shallowest to most specific, for ``path``."""
-        path = str(Path(path).resolve())
+        path = str(_norm(path))
         target_entities, target_suffix, _ = _parse_bids_name(path)
         entity_items = tuple(target_entities.items())
         entity_subsets = tuple(

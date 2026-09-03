@@ -1,6 +1,7 @@
 """Fast, subject-scoped BIDS catalog and inheritance indexing."""
 
 import json
+import os
 from pathlib import Path
 
 from qsiplan import index_subject
@@ -68,6 +69,40 @@ def test_catalog_metadata_inheritance_is_strict(tmp_path):
     sidecar.write_text('{not valid JSON')
     _records, issues = index_subject(catalog, data)
     assert any(issue.code == 'invalid-json-sidecar' for issue in issues)
+
+
+def test_annex_symlinked_data_files_still_resolve_sidecars(tmp_path):
+    """Datalad/git-annex data files are symlinks into ``.git/annex/objects``.
+
+    Sidecars (``.json``/``.bval``/``.bvec``) sit beside the *symlink*, not the
+    annex object, so inheritance resolution must not follow the symlink out of
+    the BIDS tree. Regression test for datalad-cloned datasets reading as
+    "PE unknown".
+    """
+    root = _dataset(tmp_path)
+    # Emulate git-annex: move each data NIfTI into an object store outside the
+    # BIDS hierarchy and replace it in place with a relative symlink, exactly
+    # as `datalad get` leaves them.
+    store = tmp_path / 'annex_objects'
+    store.mkdir()
+    for index, nifti in enumerate(sorted(root.rglob('*.nii.gz'))):
+        target = store / f'OBJ-{index}.nii.gz'
+        target.write_bytes(nifti.read_bytes())
+        nifti.unlink()
+        nifti.symlink_to(os.path.relpath(target, nifti.parent))
+
+    dwi_symlink = next((root / 'sub-01/ses-01/dwi').glob('*_dwi.nii.gz'))
+    assert dwi_symlink.is_symlink()
+    assert dwi_symlink.resolve().parent == store  # resolve() escapes the BIDS tree
+
+    catalog = Bids2TableCatalog(root)
+    data = catalog.subject_data('01', session='01')
+    records, issues = index_subject(catalog, data)
+    dwi = next(record for record in records if record.is_dwi)
+    assert dwi.signature.pe_dir == 'j-'  # from the sidecar beside the symlink
+    assert dwi.signature.readout_time == 0.05  # inherited from root/dwi.json
+    assert dwi.max_bval == 1000.0  # from the sibling .bval
+    assert not issues
 
 
 def test_catalog_root_controls_inheritance_when_description_is_missing(tmp_path):

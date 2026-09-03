@@ -17,7 +17,6 @@ import json
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import quote, unquote, urlparse
 
@@ -85,6 +84,8 @@ class ExplorerApp:
         self._max_cached_policies = max(1, max_cached_policies)
         self._lock = threading.Lock()
         self._states = OrderedDict()
+        self._index_lock = threading.Lock()
+        self._index_html = None
 
     def _state(self, label):
         """A bounded, lazily indexed state for one subject."""
@@ -140,16 +141,30 @@ class ExplorerApp:
         }
 
     def index_page(self) -> str:
-        """The subject list at ``/`` (multi-subject datasets)."""
-        items = ''.join(
-            f'<li><a href="/sub-{quote(label, safe="")}">sub-{escape(label)}</a></li>'
-            for label in self.subjects
-        )
-        return (
-            '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">\n'
-            '<title>qsiplan explorer</title></head>\n'
-            f'<body><h1>qsiplan explorer</h1><ul>{items}</ul></body></html>'
-        )
+        """The cohort dashboard at ``/`` - the group-level view over all subjects.
+
+        Built once (indexing every subject and compiling each method's plan) and
+        cached; subsequent hits are instant. Each subject/class drills into its
+        live ``/sub-<label>`` explorer.
+        """
+        with self._index_lock:
+            if self._index_html is None:
+                from .cohort import render_cohort_html
+
+                initial_method = (
+                    self._initial_selection.hmc.value
+                    if self._initial_selection is not None
+                    else None
+                )
+                self._index_html = render_cohort_html(
+                    self._source,
+                    self.subjects,
+                    session_id=self._session_id,
+                    policy=self._base_policy,
+                    live=True,
+                    initial_method=initial_method,
+                )
+            return self._index_html
 
 
 class _Handler(BaseHTTPRequestHandler):

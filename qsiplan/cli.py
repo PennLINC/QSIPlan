@@ -105,11 +105,27 @@ def _build_parser():
         'the subject label is inserted before the extension.',
     )
     parser.add_argument(
+        '--cohort-html',
+        metavar='PATH',
+        help='Write a static group-level dashboard to PATH: every subject sorted '
+        'into workflow equivalence classes, with a data-completeness matrix. Also '
+        'writes a sub-<label>.html explorer beside it for each subject, so the '
+        "dashboard's drill-down links resolve offline.",
+    )
+    parser.add_argument(
         '--serve',
         action='store_true',
-        help='Serve the explorer live at http://localhost:<port> instead of '
+        help='Serve the explorer live at http://<host>:<port> instead of '
         'writing files: every control change is answered by the real compiler, '
-        'and flag combinations beyond the embedded grid work too.',
+        'and flag combinations beyond the embedded grid work too. The root page '
+        'is the group-level cohort dashboard.',
+    )
+    parser.add_argument(
+        '--host',
+        default='127.0.0.1',
+        help='Interface --serve binds to (default: 127.0.0.1, localhost only). '
+        'Use 0.0.0.0 to expose the server to your whole network - the server is '
+        'unauthenticated and reads your dataset, so only do this on a trusted network.',
     )
     parser.add_argument(
         '--port',
@@ -156,10 +172,11 @@ def main(argv=None):
         return 1
 
     policy = policy_from_namespace(args)
+    initial_selection = selections[0] if args.hmc_method else None
 
     if args.serve:
-        if args.html:
-            raise SystemExit('--serve and --html are mutually exclusive')
+        if args.html or args.cohort_html:
+            raise SystemExit('--serve cannot be combined with --html or --cohort-html')
         from qsiplan.serve import ExplorerApp, run_server
 
         app = ExplorerApp(
@@ -167,9 +184,43 @@ def main(argv=None):
             subjects,
             session_id=args.session_id,
             base_policy=policy,
-            initial_selection=selections[0] if args.hmc_method else None,
+            initial_selection=initial_selection,
         )
-        return run_server(app, port=args.port)
+        return run_server(app, host=args.host, port=args.port)
+
+    if args.cohort_html:
+        from qsiplan.cohort import render_cohort_html
+
+        out = Path(args.cohort_html)
+        out.write_text(
+            render_cohort_html(
+                catalog,
+                subjects,
+                session_id=args.session_id,
+                policy=policy,
+                live=False,
+                initial_method=args.hmc_method,
+            )
+        )
+        print(f'wrote {out}')
+        # Sibling per-subject explorer pages so the dashboard's static
+        # drill-down links (sub-<label>.html) resolve without a server.
+        for subject, subject_data in catalog.iter_subject_data(subjects, args.session_id):
+            if not subject_data['dwi']:
+                continue
+            records, index_issues = index_subject(catalog, subject_data)
+            sibling = out.parent / f'sub-{subject}.html'
+            sibling.write_text(
+                render_explorer_html(
+                    records,
+                    subject,
+                    index_issues=index_issues,
+                    initial_policy=policy,
+                    initial_selection=initial_selection,
+                )
+            )
+            print(f'  sub-{subject}: wrote {sibling.name}')
+        return 0
 
     exit_code = 0
     for subject, subject_data in catalog.iter_subject_data(subjects, args.session_id):
@@ -192,7 +243,7 @@ def main(argv=None):
                 subject,
                 index_issues=index_issues,
                 initial_policy=policy,
-                initial_selection=selections[0] if args.hmc_method else None,
+                initial_selection=initial_selection,
             )
             with open(path, 'w') as fobj:
                 fobj.write(page)
