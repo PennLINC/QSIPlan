@@ -1209,8 +1209,7 @@ def _cohort_controls(data) -> str:
         for m in data['methods']
     )
     gran = (
-        '<button data-gran="session">session</button>'
-        '<button data-gran="subject">subject</button>'
+        '<button data-gran="session">session</button><button data-gran="subject">subject</button>'
         if any(e['sessions'] for e in data['subject'])
         else '<button data-gran="subject">subject</button>'
     )

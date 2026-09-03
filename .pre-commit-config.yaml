@@ -1,0 +1,27 @@
+# The single source of truth for lint/format tool versions. Both local hooks
+# (after `pre-commit install`) and CI (`pre-commit run --all-files`, see
+# .github/workflows/lint.yml) run these exact pinned versions, so a check can
+# never pass locally and then fail in CI on a version difference. Bump a `rev`
+# here and every environment follows.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.21
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.3.0
+    hooks:
+      - id: codespell
+        additional_dependencies: [tomli]
+
+  # Read-only validators only. File-mutating hygiene hooks (end-of-file-fixer,
+  # trailing-whitespace) are deliberately omitted: they would rewrite the
+  # golden HTML report fixtures the tests compare byte-for-byte.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-yaml
+      - id: check-toml
