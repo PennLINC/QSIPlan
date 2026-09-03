@@ -210,6 +210,9 @@ class FileRecord:
     max_bval: float | None = None
     # Read from the NIfTI header (dwi only); None = unreadable/undetermined:
     grid: GridInfo | None = None
+    # Resolved once during indexing; the explorer must not rescan the dataset.
+    bval_file: str | None = None
+    bvec_file: str | None = None
 
     def __post_init__(self):
         # Freeze the raw sidecar so nothing downstream can mutate shared state.
@@ -333,6 +336,7 @@ class GroupingPolicy:
     separate_all_dwis: bool = False
     ignore_fieldmaps: bool = False
     ignore_pepolar_dwis: bool = False
+    ignore_t2w: bool = False
     ignore_shims: bool = False
     ignore_fov: bool = False
     ignore_sdc: bool = False
@@ -374,13 +378,14 @@ class GroupingPolicy:
         flags = []
         if self.separate_all_dwis:
             flags.append('--separate-all-dwis')
-        # In qsiprep's declared choice order, skipping the two values
-        # (t2w, phase) that are not grouping-policy fields.
+        # In qsiprep's declared choice order, skipping the one value (phase)
+        # that is not a grouping-policy field.
         ignored = [
             value
             for value, enabled in (
                 ('fieldmaps', self.ignore_fieldmaps),
                 ('pepolar-dwis', self.ignore_pepolar_dwis),
+                ('t2w', self.ignore_t2w),
                 ('sdc', self.ignore_sdc),
                 ('shims', self.ignore_shims),
                 ('fov', self.ignore_fov),

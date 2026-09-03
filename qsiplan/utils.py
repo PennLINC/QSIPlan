@@ -105,7 +105,7 @@ def write_content(filename, content):
     """
     filename = Path(filename)
     if not isinstance(content, str):
-        rows = content if content and isinstance(content[0], (list, tuple)) else [content]
+        rows = content if content and isinstance(content[0], list | tuple) else [content]
         content = '\n'.join(' '.join(str(value) for value in row) for row in rows)
     if content and not content.endswith('\n'):
         content += '\n'

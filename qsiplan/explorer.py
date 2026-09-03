@@ -27,28 +27,40 @@ from .inference import build_grouping
 from .models import DWIGrouping, FileRecord, GroupingPolicy
 
 
+def canonical_explorer_policy(policy: GroupingPolicy | None = None) -> GroupingPolicy:
+    """Canonicalize layered fieldmap-less flags to the explorer's single axis."""
+    policy = policy if policy is not None else GroupingPolicy()
+    if policy.force_t2wreg:
+        return dataclasses.replace(policy, use_synb0=False, use_nipreps_syn_sdc=False)
+    if policy.use_synb0 and policy.use_nipreps_syn_sdc:
+        return dataclasses.replace(policy, use_nipreps_syn_sdc=False)
+    return policy
+
+
 def reachable_policies(base: GroupingPolicy | None = None) -> list[GroupingPolicy]:
     """Every policy the explorer page's controls can select.
 
-    The grid mirrors the CLI's policy flags: the five boolean toggles
+    The grid mirrors the CLI's policy flags: the six boolean toggles
     (``--separate-all-dwis`` and the ``--ignore`` values fieldmaps/pepolar-dwis/
-    shims/fov), the mutually exclusive fieldmap-less methods as one axis
+    t2w/shims/fov), the mutually exclusive fieldmap-less methods as one axis
     (automatic, SyN, SyNb0, forced T2Wreg - layering them is reachable at the
     CLI but resolves to one of these), and the distortion-group merge strategy.
     The one field outside the grid (``ignore_sdc``) carries ``base``'s value
     through every combination.
     """
-    base = base if base is not None else GroupingPolicy()
+    base = canonical_explorer_policy(base)
     policies = []
     for (
         separate,
         no_fmaps,
         no_pepolar,
+        no_t2w,
         no_shims,
         no_fov,
         fieldmapless,
         merge,
     ) in itertools.product(
+        (False, True),
         (False, True),
         (False, True),
         (False, True),
@@ -63,6 +75,7 @@ def reachable_policies(base: GroupingPolicy | None = None) -> list[GroupingPolic
                 separate_all_dwis=separate,
                 ignore_fieldmaps=no_fmaps,
                 ignore_pepolar_dwis=no_pepolar,
+                ignore_t2w=no_t2w,
                 ignore_shims=no_shims,
                 ignore_fov=no_fov,
                 use_nipreps_syn_sdc=fieldmapless == 'syn',
@@ -106,16 +119,35 @@ def drop_fieldmaps(records: list[FileRecord], index_issues=()) -> tuple[list[Fil
     return kept_records, kept_issues
 
 
+def drop_t2w(records: list[FileRecord], index_issues=()) -> tuple[list[FileRecord], list]:
+    """The record list as ``--ignore t2w`` indexing would have built it.
+
+    Filters out the T2w anat records (and any indexing issues that only concern
+    them), so one T2w-included index pass serves both settings. T1w records are
+    kept - only T2Wreg fieldmap-less correction depends on the T2w.
+    """
+    t2w_paths = {record.path for record in records if record.is_anat and record.suffix == 'T2w'}
+    kept_records = [record for record in records if record.path not in t2w_paths]
+    kept_issues = [
+        issue
+        for issue in index_issues
+        if not (issue.files and all(path in t2w_paths for path in issue.files))
+    ]
+    return kept_records, kept_issues
+
+
 def build_for_policy(
     records: list[FileRecord],
     subject_id: str,
     policy: GroupingPolicy,
     index_issues=(),
 ) -> DWIGrouping:
-    """One grouping under one policy, from a fieldmaps-included index."""
+    """One grouping under one policy, from a fieldmaps- and T2w-included index."""
     index_issues = list(index_issues)
     if policy.ignore_fieldmaps:
         records, index_issues = drop_fieldmaps(records, index_issues)
+    if policy.ignore_t2w:
+        records, index_issues = drop_t2w(records, index_issues)
     return build_grouping(
         records,
         subject_id=subject_id,
@@ -134,9 +166,41 @@ class PolicyGrid:
     signature.
     """
 
-    policy_index: dict[str, str]
+    policy_index: dict[str, str | None]
     policy_cli: dict[str, str]
     groupings: dict[str, DWIGrouping]
+
+
+def build_live_policy_grid(
+    records: list[FileRecord],
+    subject_id: str,
+    *,
+    base: GroupingPolicy | None = None,
+    index_issues=(),
+) -> PolicyGrid:
+    """A live grid with only the initial grouping compiled.
+
+    Unknown signatures are filled by the server as policies are requested.
+    Static pages still use :func:`build_policy_grid` for full offline parity.
+    """
+    base = canonical_explorer_policy(base)
+    grouping = build_for_policy(records, subject_id, base, index_issues)
+    return live_policy_grid(grouping, base)
+
+
+def live_policy_grid(grouping: DWIGrouping, base: GroupingPolicy) -> PolicyGrid:
+    """Wrap one already-compiled grouping in the live policy index."""
+    base = canonical_explorer_policy(base)
+    signature = grouping_signature(grouping)
+    policies = reachable_policies(base)
+    policy_index = {policy.policy_key(): None for policy in policies}
+    policy_cli = {policy.policy_key(): policy.cli_phrase() for policy in policies}
+    policy_index[base.policy_key()] = signature
+    return PolicyGrid(
+        policy_index=policy_index,
+        policy_cli=policy_cli,
+        groupings={signature: grouping},
+    )
 
 
 def build_policy_grid(

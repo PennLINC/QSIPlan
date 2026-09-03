@@ -1107,6 +1107,7 @@ def build_grouping(
     separate_all_dwis: bool = False,
     ignore_fieldmaps: bool = False,
     ignore_pepolar_dwis: bool = False,
+    ignore_t2w: bool = False,
     ignore_shims: bool = False,
     ignore_fov: bool = False,
     ignore_sdc: bool = False,
@@ -1118,8 +1119,9 @@ def build_grouping(
 ) -> DWIGrouping:
     """Assemble the full :class:`~.models.DWIGrouping` from indexed records.
 
-    ``ignore_fieldmaps`` took effect during indexing; it is accepted here only
-    so the recorded :class:`~.models.GroupingPolicy` is complete.
+    ``ignore_fieldmaps`` and ``ignore_t2w`` took effect during indexing (the
+    fmap/ and T2w records were never built); they are accepted here only so the
+    recorded :class:`~.models.GroupingPolicy` is complete.
     """
     distortion_group_merge = distortion_group_merge or 'concat'
     if distortion_group_merge not in ('concat', 'average', 'none'):
@@ -1131,6 +1133,7 @@ def build_grouping(
         separate_all_dwis=separate_all_dwis,
         ignore_fieldmaps=ignore_fieldmaps,
         ignore_pepolar_dwis=ignore_pepolar_dwis,
+        ignore_t2w=ignore_t2w,
         ignore_shims=ignore_shims,
         ignore_fov=ignore_fov,
         ignore_sdc=ignore_sdc,

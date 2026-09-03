@@ -11,7 +11,7 @@ license = { file = "LICENSE" }
 requires-python = ">=3.11"
 authors = [{ name = "The PennLINC developers" }]
 dependencies = [
-    "pybids",
+    "bids2table >= 2.3.1",
     "nibabel",
     "numpy",
 ]
@@ -21,12 +21,18 @@ tests = [
     "pytest",
     "niworkflows",
 ]
+# Linting/formatting runs through pre-commit, which manages its own pinned
+# tool versions (see .pre-commit-config.yaml) - so `dev` installs the runner,
+# not ruff itself, and local and CI can never disagree on a ruff version.
+dev = [
+    "pre-commit",
+]
 
 [project.scripts]
 qsiplan = "qsiplan.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/PennLINC/qsiprep"
+Homepage = "https://github.com/PennLINC/qsiplan"
 
 [tool.hatch.build.targets.wheel]
 packages = ["qsiplan"]

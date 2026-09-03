@@ -69,6 +69,16 @@ def test_render_html_plan_host_per_output(tmp_path, scenario):
     assert page.count('class="pipeline-viewer output-plan"') == expected
     for concat in grouping.concatenation_groups.values():
         assert f'data-output-name="{concat.output_name}"' in page
+    # Large virtual-acquisition grids start compact; ordinary pages retain
+    # their fully expanded presentation.
+    details = '<details class="output-details"'
+    assert page.count(details) == expected
+    if expected > 8:
+        assert page.count('<details class="output-details">') == expected
+    else:
+        assert page.count('<details class="output-details" open>') == expected
+    # The plan appears before the tall q-space canvas inside each output.
+    assert page.index('Analysis plan for this output') < page.index('Sampling scheme')
 
 
 @pytest.mark.parametrize('scenario', SCENARIOS)
@@ -184,6 +194,24 @@ def test_render_html_is_self_contained(tmp_path):
     page = render_html(grouping)
     assert 'src="http' not in page
     assert 'href="http' not in page
+
+
+def test_pipeline_diagram_exposes_keyboard_and_screen_reader_details():
+    from qsiplan.viz.pipeline import pipeline_assets
+
+    _, script = pipeline_assets()
+    assert "'aria-label': 'Processing plan for ' + output.name" in script
+    assert "node.setAttribute('tabindex', '0')" in script
+    assert "node.addEventListener('focus'" in script
+    assert "node.addEventListener('click'" in script
+    assert "node.addEventListener('keydown'" in script
+
+
+def test_large_output_grids_start_collapsed():
+    from qsiplan.interactive import _output_details_attr
+
+    assert _output_details_attr(8) == ' open'
+    assert _output_details_attr(9) == ''
 
 
 def test_render_report_segment_inlines_scoped_and_self_contained(tmp_path):

@@ -147,8 +147,10 @@
       width: width,
       height: height,
       class: 'pp-svg',
-      role: 'img',
+      role: 'group',
+      'aria-label': 'Processing plan for ' + output.name,
     });
+    svg.appendChild(el('title', {}, 'Processing plan for ' + output.name));
 
     function colX(col) {
       return PAD + col * (NODE_W + GAP_X);
@@ -335,10 +337,19 @@
   }
 
   function hover(node, tip, root, html) {
-    node.addEventListener('mouseenter', function () {
+    var label = document.createElement('div');
+    label.innerHTML = html;
+    node.setAttribute('tabindex', '0');
+    node.setAttribute('role', 'img');
+    node.setAttribute('aria-label', label.textContent);
+    function show() {
       tip.innerHTML = html;
       tip.style.display = 'block';
-    });
+    }
+    function hide() {
+      tip.style.display = 'none';
+    }
+    node.addEventListener('mouseenter', show);
     node.addEventListener('mousemove', function (event) {
       var bounds = root.getBoundingClientRect();
       var x = event.clientX - bounds.left + 14;
@@ -348,7 +359,23 @@
       tip.style.top = y + 'px';
     });
     node.addEventListener('mouseleave', function () {
-      tip.style.display = 'none';
+      hide();
+    });
+    node.addEventListener('focus', function () {
+      show();
+      tip.style.left = '8px';
+      tip.style.top = '8px';
+    });
+    node.addEventListener('blur', hide);
+    node.addEventListener('click', function () {
+      node.focus();
+      show();
+    });
+    node.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape') {
+        hide();
+        node.blur();
+      }
     });
   }
 

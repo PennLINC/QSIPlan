@@ -704,6 +704,22 @@ def test_fieldmapless_t2w(tmp_path):
         assert anat_issues[0].severity == 'warning'
 
 
+def test_ignore_t2w_removes_the_t2wreg_fallback(tmp_path):
+    """``--ignore t2w`` drops the T2w, so the inferred T2Wreg fallback is gone.
+
+    The same scenario that yields T2Wreg by default now leaves the series
+    uncorrected (as if there were no T2w at all), and no T2w record is indexed.
+    """
+    grouping = load_scenario('fieldmapless_t2w', tmp_path, ignore_t2w=True)
+
+    assert grouping.policy.ignore_t2w
+    assert not grouping.estimations
+    assert set(grouping.application.values()) == {None}
+    assert not grouping.anat_files('T2w')  # the T2w was never indexed
+    for backend in ('fsl', 'tortoise', 'mixed'):
+        assert 'no-sdc' in issue_codes(check_backend(grouping, backend))
+
+
 def test_fieldmapless_t1w_only(tmp_path):
     """No fieldmap and no T2w: genuinely uncorrectable by default."""
     grouping = load_scenario('fieldmapless_t1w_only', tmp_path)
@@ -964,8 +980,8 @@ def test_mixed_refinement_needs_rpe_series(tmp_path):
     """A second DRBUDDI stage without reverse-PE dMRI series draws a warning.
 
     abcd_style (epi fmap only, no T2w): the warning says correction is
-    single-stage. abcd_t2w (same + T2w): the warning says the second stage is
-    T2Wreg instead, and the preview narrates it.
+    single-stage. abcd_t2w (same + T2w): still single-stage - the eddy path has
+    no T2Wreg second stage - and the preview says the T2w is not used.
     """
     from qsiplan import describe_processing
 
@@ -980,10 +996,9 @@ def test_mixed_refinement_needs_rpe_series(tmp_path):
     (issue,) = (
         i for i in check_backend(grouping, 'mixed') if i.code == 'drbuddi-refinement-not-useful'
     )
-    assert 'T2Wreg against a structural image' in issue.message
-    assert 'T2Wreg registers the eddy-corrected b=0 to the T2w image' in describe_processing(
-        grouping, 'mixed'
-    )
+    assert 'single-stage' in issue.message
+    assert 'no T2Wreg second stage' in issue.message
+    assert 'the eddy path has no T2Wreg stage' in describe_processing(grouping, 'mixed')
 
 
 def test_mixed_refinement_with_rpe_series(tmp_path):

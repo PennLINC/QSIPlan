@@ -16,3 +16,22 @@ renders it all as text or as a self-contained interactive HTML page:
 ```bash
 qsiplan /path/to/bids --html grouping.html
 ```
+## Development
+
+Set up the pinned lint/format hooks once — they run automatically on every
+commit and use the exact tool versions CI does, so nothing passes locally and
+then fails in CI:
+
+```bash
+pip install -e '.[tests,dev]'
+pre-commit install
+```
+
+To lint the whole tree the way CI does (or before a first commit):
+
+```bash
+pre-commit run --all-files
+```
+
+The pinned versions live in a single place, `.pre-commit-config.yaml`; bump a
+`rev` there and both local hooks and CI follow.

@@ -20,22 +20,14 @@ permissions:
   contents: read
 
 jobs:
-  style:
+  # Runs the exact hooks (and pinned tool versions) from
+  # .pre-commit-config.yaml - the same ones `pre-commit install` runs on every
+  # local commit. There is one pin, in that file, so local and CI cannot drift.
+  pre-commit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      # Keep this pin in sync with the ruff rev in .pre-commit-config.yaml
-      # and the dev pin in pyproject.toml. Unpinned, CI silently follows new
-      # ruff releases and goes red without a code change.
-      - run: pipx run --spec ruff==0.15.21 ruff check .
-      - run: pipx run --spec ruff==0.15.21 ruff format --diff .
-
-  codespell:
-    name: Check for spelling errors
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-      - name: Codespell
-        uses: codespell-project/actions-codespell@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: pre-commit/action@v3.0.1

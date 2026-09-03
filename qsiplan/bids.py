@@ -35,7 +35,22 @@ Fetch some test data
 
 """
 
+import itertools
+import os
 from pathlib import Path
+
+
+def _norm(path):
+    """Absolute, lexically-normalized path that does *not* follow symlinks.
+
+    ``Path.resolve()`` follows symlinks, which moves a git-annex/datalad data
+    file (a symlink into ``.git/annex/objects``) out of its BIDS directory, so
+    its JSON/bval/bvec sidecars -- which sit beside the *symlink*, not the
+    annex object -- can no longer be found. Lexical normalization with
+    :func:`os.path.abspath` keeps the file at its BIDS location while still
+    resolving ``.`` and ``..``.
+    """
+    return Path(os.path.abspath(path))
 
 
 def find_bids_root(path):
@@ -52,7 +67,7 @@ def find_bids_root(path):
         The closest ancestor directory holding a ``dataset_description.json``,
         or ``None`` if ``path`` is not inside a BIDS dataset.
     """
-    for parent in Path(path).resolve().parents:
+    for parent in _norm(path).parents:
         if (parent / 'dataset_description.json').is_file():
             return parent
 
@@ -93,7 +108,42 @@ def _parse_bids_name(path):
     return entities, suffix, extension
 
 
-def _inheritance_levels(path):
+def parse_file_entities(path):
+    """Parse the BIDS entities QSIPlan uses without constructing a layout.
+
+    Entity keys match PyBIDS' public spelling for the common entities so this
+    can replace ``bids.layout.parse_file_entities`` at the QSIPlan boundary.
+    Unknown entities are retained under their short filename spelling.
+    """
+    path = Path(path)
+    entities, suffix, extension = _parse_bids_name(path)
+    names = {
+        'sub': 'subject',
+        'ses': 'session',
+        'acq': 'acquisition',
+        'dir': 'direction',
+        'rec': 'reconstruction',
+    }
+    parsed = {names.get(key, key): value for key, value in entities.items()}
+    if suffix:
+        parsed['suffix'] = suffix
+    if extension:
+        parsed['extension'] = extension
+
+    parts = path.parts
+    for index, part in enumerate(parts):
+        if not part.startswith('sub-'):
+            continue
+        datatype_index = index + 1
+        if datatype_index < len(parts) and parts[datatype_index].startswith('ses-'):
+            datatype_index += 1
+        if datatype_index < len(parts) - 1:
+            parsed['datatype'] = parts[datatype_index]
+        break
+    return parsed
+
+
+def _inheritance_levels(path, root=None):
     """List the directories that may hold files applicable to ``path``.
 
     The BIDS inheritance principle lets files sitting in a data file's ancestor
@@ -104,9 +154,11 @@ def _inheritance_levels(path):
     already been copied into a working directory -- only ever match files
     sitting beside them.
     """
-    path = Path(path).resolve()
-    root = find_bids_root(path)
+    path = _norm(path)
+    root = _norm(root) if root is not None else find_bids_root(path)
     if root is None:
+        return [path.parent]
+    if root != path.parent and root not in path.parents:
         return [path.parent]
 
     # ``reversed(path.parents)`` runs shallowest-first and ends at ``path.parent``.
@@ -170,6 +222,63 @@ def find_associated_files(path, extension):
         associated_files.extend(matches)
 
     return associated_files
+
+
+class BIDSInheritanceIndex:
+    """Resolve associated files for many targets with one directory scan.
+
+    The former per-file implementation rescanned a large ``dwi/`` directory
+    for every image. This index scans each inheritance level once and resolves
+    candidate entity subsets through dictionary lookups.
+    """
+
+    def __init__(self, targets, extensions=('.json', '.bval', '.bvec'), root=None):
+        self._extensions = frozenset(extensions)
+        self._root = _norm(root) if root is not None else None
+        self._levels = {
+            str(_norm(target)): tuple(_inheritance_levels(target, self._root))
+            for target in targets
+        }
+        unique_levels = {level for levels in self._levels.values() for level in levels}
+        self._candidates = {}
+        for level in unique_levels:
+            if not level.is_dir():
+                continue
+            for candidate in level.iterdir():
+                if not candidate.is_file():
+                    continue
+                entities, suffix, extension = _parse_bids_name(candidate)
+                if extension not in self._extensions or not suffix:
+                    continue
+                key = (level, extension, suffix, frozenset(entities.items()))
+                self._candidates.setdefault(key, []).append(candidate)
+
+    def find(self, path, extension):
+        """Applicable files, shallowest to most specific, for ``path``."""
+        path = str(_norm(path))
+        target_entities, target_suffix, _ = _parse_bids_name(path)
+        entity_items = tuple(target_entities.items())
+        entity_subsets = tuple(
+            frozenset(subset)
+            for size in range(len(entity_items) + 1)
+            for subset in itertools.combinations(entity_items, size)
+        )
+        associated = []
+        levels = self._levels.get(path)
+        if levels is None:
+            levels = _inheritance_levels(path, self._root)
+        for level in levels:
+            matches = []
+            for subset in entity_subsets:
+                matches.extend(self._candidates.get((level, extension, target_suffix, subset), ()))
+            if len(matches) > 1:
+                names = ', '.join(sorted(match.name for match in matches))
+                raise ValueError(
+                    f'Multiple {extension} files in {level} apply to {path}: {names}. '
+                    'The BIDS inheritance principle allows at most one per directory.'
+                )
+            associated.extend(matches)
+        return associated
 
 
 def find_bval(path):
